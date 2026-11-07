@@ -8,7 +8,6 @@
  */
 import { world, runUpdates } from './world';
 import { initTiles } from './world/tiles';
-import { initEntity } from './entity';
 import { initAgents } from './world/agents';
 import { initController } from './player/controller';
 import { initHud } from './hud/hud';
@@ -39,7 +38,6 @@ async function start(): Promise<void> {
   initHud(); // C
   initTiles(); // A
   await initAgents(); // A
-  await initEntity();
   initController(); // C
   void initMic(); // C (waits for a user gesture itself)
   initSoundSources(world); // stub: sound sources (src/world/soundSources.ts)
