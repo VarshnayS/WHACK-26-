@@ -1,0 +1,18 @@
+# dependencies / build output
+node_modules/
+dist/
+
+# secrets: never commit
+.env
+.env.*
+!.env.example
+
+# local tile cache (Google tiles must not be committed)
+tile-cache/
+
+# generated: copied from three by `npm run setup:draco`
+public/draco/
+
+# OS / logs
+.DS_Store
+*.log

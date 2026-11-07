@@ -1,0 +1,28 @@
+{
+  "name": "blind-simulator",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Blind Simulator: sonar horror game on real streets (WHACK 26)",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "proxy": "node --env-file=.env proxy/cache-proxy.mjs",
+    "dev:all": "node scripts/dev-all.mjs",
+    "fetch:osm": "node scripts/fetch-osm.mjs",
+    "setup:draco": "node -e \"require('fs').cpSync('node_modules/three/examples/jsm/libs/draco','public/draco',{recursive:true});console.log('Draco decoder copied to public/draco/')\""
+  },
+  "dependencies": {
+    "3d-tiles-renderer": "^0.5.4",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6"
+  }
+}

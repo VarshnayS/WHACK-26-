@@ -1,0 +1,20 @@
+# Code owners: GitHub auto-requests a review from these people on PRs that touch their files.
+# Later rules override earlier ones, so the shared files are listed last.
+# TODO: replace @USERNAME_A / @USERNAME_B / @USERNAME_C with real GitHub usernames.
+
+# A: world / tiles / agents (+ proxy and Node scripts)
+/src/world/          @USERNAME_A
+/proxy/              @USERNAME_A
+/scripts/            @USERNAME_A
+
+# B: sonar material
+/src/render/         @USERNAME_B
+
+# C: mic / HUD / audio / collision
+/src/audio/          @USERNAME_C
+/src/hud/            @USERNAME_C
+/src/player/         @USERNAME_C
+
+# Shared contracts: everyone
+/README.md           @USERNAME_A @USERNAME_B @USERNAME_C
+/src/world/index.ts  @USERNAME_A @USERNAME_B @USERNAME_C
