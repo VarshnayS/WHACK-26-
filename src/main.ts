@@ -11,7 +11,7 @@ import { initTiles } from './world/tiles';
 import { initAgents } from './world/agents';
 import { initController } from './player/controller';
 import { initHud } from './hud/hud';
-import { initMic } from './audio/mic';
+import { initMic } from './audio'; // C: initAudioSonar(world)
 import { updatePings } from './render/pings';
 
 function setupRenderer(): void {

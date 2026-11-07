@@ -74,7 +74,14 @@ Check the proxy works by opening http://localhost:8787/v1/3dtiles/root.json. You
 |---|---|
 | Click | Lock the mouse (first-person look) |
 | WASD | Walk |
-| Space | Test sonar ping (until the mic is wired in) |
+| First click | Also enables the mic (browser permission prompt), then ~1.5 s calibration: stay quiet |
+| Space / Shift+Space | Medium / max-strength sonar pulse (works with no mic) |
+| C | Recalibrate the mic noise floor |
+| M | Mute / unmute the mic |
+| [ / ] | Mic sensitivity down / up (pulse size; saved per browser) |
+| - / = | Mic trigger level down / up (dB above room noise; saved per browser) |
+| 0 | Reset mic tuning to the defaults |
+| ` (backtick) | Audio debug meter |
 | F | Toggle the free-fly debug camera |
 | R | Debug: reveal everything (full grid, no sonar mask), for checking alignment |
 | Esc | Release the mouse |
@@ -176,10 +183,107 @@ world.onUpdate((dt) => { /* runs every frame */ });
 | Feature | Where to plug in |
 |---|---|
 | **Sonar look** | Tune `src/render/sonarMaterial.ts` (wave speed, ring width, fade, grid density). Don't add per-object materials. |
-| **Mic** | `src/audio/mic.ts`: Web Audio `getUserMedia` + `AnalyserNode`. Calibrate ambient noise on start; above baseline + ~15 dB, call `world.ping(playerPos, rangeFromDb)`. Mic needs `localhost` or HTTPS. |
+| **Mic** | Done: see "Audio sonar" below. Mic needs `localhost` or HTTPS. |
 | **Collision** | Fill in `checkCollision(pos, dir)` and `groundHeight(pos)` in `src/player/collision.ts` (raycasts against `world.tilesGroup`, which works on geometry with no textures). Add `three-mesh-bvh` only if FPS drops. |
 | **Spatial audio** | Attach `THREE.PositionalAudio` to each entry in `world.agents` (footsteps, engines). |
 | **Entity AI** | Use the OSM path graph from `src/world/osm.ts` for pathfinding; move towards the player's last noise position. Render it with the shared material too. |
+
+## Audio sonar (mic → pulses)
+
+`src/audio/` turns mic noise into sonar pulses; `src/sonar/pulses.ts` is the pulse bus everyone shares.
+
+```
+mic.ts (getUserMedia, AGC/NS/EC off) → AnalyserNode (fft 2048, no smoothing, not connected to speakers)
+  → detector.ts FeatureExtractor: RMS dBFS, peak, spectral centroid, spectral flux
+  → detector.ts OnsetDetector.step(features, nowMs): adaptive noise floor, onset + classification
+  → index.ts: emitPulse(...) + emitNoise(...) from the camera position
+```
+
+### The Pulse contract (`src/sonar/pulses.ts`; keep it stable)
+
+```ts
+type PulseSource = 'player' | 'agent' | 'enemy' | 'debug';
+interface Pulse {
+  id: number; origin: THREE.Vector3; startTime: number; // s, performance.now()/1000
+  speed: number; maxRadius: number;                     // m/s, m
+  strength: number; brightness: number;                 // 0..1 (brightness = spectral centroid)
+  kind: 'transient' | 'sustained'; source: PulseSource;
+}
+emitPulse(p: Omit<Pulse, 'id' | 'startTime'>): Pulse   // anyone can call it: engines, footsteps, AI…
+onPulse(cb): unsubscribe
+getActivePulses(now): Array<Pulse & { radius; age; fade }>
+MAX_ACTIVE_PULSES = 16                                  // oldest dropped beyond this
+```
+
+- `transient` (clap, click): fast (45 m/s), crisp. `sustained` (shout, hum held > 300 ms): slower (25 m/s), should look wider; it repeats at half strength every 400 ms while held.
+- Pulses expire once `radius >= maxRadius`. `fade` is 1 at birth and falls linearly to 0 at `maxRadius`.
+- The bus copies `origin`, so callers can pass a reused vector.
+
+**Shader teammate:** once per frame, read the pulses into your fixed-size uniform arrays:
+
+```ts
+import { getActivePulses, MAX_ACTIVE_PULSES } from '../sonar/pulses';
+const pulses = getActivePulses(performance.now() / 1000);  // ≤ MAX_ACTIVE_PULSES, oldest first
+for (let i = 0; i < MAX_ACTIVE_PULSES; i++) {
+  const p = pulses[i];
+  // p ? write p.origin, p.radius, p.maxRadius, p.strength, p.brightness, p.fade, p.kind : mark slot unused
+}
+```
+
+The returned array and its objects are **reused on every call** (no per-frame garbage), so copy values out and don't keep references. Until the shader reads this, `DETECTOR_CONFIG.debugRings` draws each pulse as a ring on the ground (`src/sonar/debug-rings.ts`; delete the file and its one use in `src/audio/index.ts` when it's no longer needed). Note: this bus is separate from the older `world.ping()` / `src/render/pings.ts` path, and mic pulses don't go through `world.ping()`.
+
+**Enemy AI teammate:** subscribe to noise events. They fire on every player sound (each mic detection, including sustained repeats, and SPACE pulses):
+
+```ts
+import { onNoise } from '../sonar/pulses';
+const off = onNoise(({ position, loudness, time }) => {
+  // position: copy of the player position (safe to keep), loudness 0..1, time in s (pulse clock)
+});
+```
+
+Event only, no AI logic. `emitNoise(position, loudness)` is exported too if other noises should be audible to the AI.
+
+### Tuning for your mic and room
+
+Every mic and room is different, so the detector adapts in real time at both ends:
+
+- **Room noise (low end):** C runs a 1.5 s silent calibration, then the noise floor keeps following the room whenever you're quiet (fan on, window open…).
+- **Mic loudness (high end), auto-range:** the loudest recent sound (+3 dB) counts as a full-size pulse. Louder sounds raise it instantly; each quieter sound pulls it down 30 %, and it also relaxes 0.5 dB/s, so a quiet or low-gain mic reaches full-size pulses after a few sounds. It's capped by the mic's headroom. C also resets it (new mic = press C).
+
+**In game:** `[` `]` change sensitivity and `-` `=` change the trigger level. Changes show in the HUD, are saved per browser (localStorage) so each teammate keeps settings for their own mic, and `0` resets them.
+
+**In code:** the QUICK TUNING block at the top of `src/audio/detector.ts`:
+
+| Constant | Default | Meaning |
+|---|---|---|
+| `SENSITIVITY` | 1.0 | Pulse size multiplier. Pulses feel weak → 1.3–1.5 |
+| `TRIGGER_DB` | 15 | dB above room noise needed to fire. Quiet sounds missed → 10–12; typing triggers → 20+ |
+| `AUTO_RANGE` | true | Learn the mic's loudness. `false` = fixed scale of `FIXED_RANGE_DB` |
+| `FIXED_RANGE_DB` | 40 | Only without auto-range: dB above the trigger that counts as full size |
+| `STRENGTH_CURVE` | 0.7 | < 1 boosts quiet/medium sounds, 1 = linear |
+| `MIN_RADIUS_M`, `MAX_RADIUS_M` | 10, 80 | Smallest / largest pulse reach |
+
+Open the meter with backtick: green bar = RMS, white line = noise floor, red line = trigger threshold, blue line = learned full-strength level, flash = detection. The blue line text (`full @ +NN dB`) shows how far above the room noise a sound must be to make a full-size pulse.
+
+### All knobs (`DETECTOR_CONFIG` in `src/audio/detector.ts`)
+
+| Knob | Default | Turn it… |
+|---|---|---|
+| `thresholdDb` | 15 | up if typing / background noise triggers; down if claps are missed |
+| `refractoryMs` | 250 | up if one clap gives two pulses |
+| `fluxMin` | 0.35 | up if slow swells trigger; down if soft onsets are missed |
+| `transientDropDb`, `sustainMs` | 12 dB, 300 ms | control transient vs sustained; raise `sustainMs` if claps in a reverberant room read as sustained |
+| `sustainRepeatMs`, `sustainRepeatScale` | 400 ms, 0.5 | rate and size of pulses while a sound is held |
+| `autoRangeStartDb`, `autoRangeHeadroomDb`, `autoRangeLearnRate`, `autoRangeDecayDbPerS` | 45 dB, 3 dB, 0.3, 0.5 dB/s | auto-range: starting full-strength level, how it learns up/down |
+| `autoRangeMinSpanDb`, `ceilingDb` | 12 dB, -6 dBFS | auto-range limits: tiny sounds can't max out; mic headroom cap |
+| `minRadius`, `maxRadius` | 10, 80 m | pulse reach at strength 0 / 1 |
+| `transientSpeed`, `sustainedSpeed` | 45, 25 m/s | wave speed per kind |
+| `floorRiseTauS`, `floorFallTauS` | 4, 0.6 s | how fast the noise floor adapts while quiet |
+| `calibrationMs` | 1500 | silent calibration length (C reruns it) |
+| `keyboardStrength` | 0.5 | SPACE strength (Shift+SPACE is always 1) |
+| `debugRings` | true | temporary ring visualiser |
+
+Clap pulses fire when the clap's energy dies away (about 80 ms), so loudness is measured over the whole clap. `dispose()` from `src/audio` stops the mic tracks, closes the AudioContext and removes the overlay and listeners.
 
 ## Attribution (must stay visible)
 
