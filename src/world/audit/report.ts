@@ -364,6 +364,10 @@ export function initReport(world: World): () => void {
    * remain asynchronous and are not waited on.
    */
   function captureSnapshot(): boolean {
+    if (!context || !snapshotContext) {
+      snapshotError = 'Could not create a 2D canvas context.';
+      return false;
+    }
     const source = world.renderer.domElement;
     const sourceWidth = Math.max(1, source.width || window.innerWidth);
     const sourceHeight = Math.max(1, source.height || window.innerHeight);
@@ -482,7 +486,7 @@ export function initReport(world: World): () => void {
   // ---------------------------------------------------------------------------
 
   function drawHotspots(data: Aggregate, mapRect: DrawRect): void {
-    if (!snapshotView || data.cells.length === 0) return;
+    if (!context || !snapshotView || data.cells.length === 0) return;
 
     const view = snapshotView;
     const pixelsPerMetre = Math.min(
@@ -543,6 +547,7 @@ export function initReport(world: World): () => void {
   }
 
   function drawCanvas(data: Aggregate): void {
+    if (!context) return;
     fitCanvasToRenderer();
 
     const width = canvas.width;
