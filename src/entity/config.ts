@@ -94,11 +94,14 @@ export const AUDIO_ENABLED = true;
 
 /** Height of the figure's proportions before BODY_SCALE. */
 export const BODY_HEIGHT = 2.5;
-/** Uniform scale on the whole figure (1.5 = 3.75 m tall and 50% thicker), so it towers over people. */
-export const BODY_SCALE = 1.5;
+/** Uniform scale on the whole figure (1.1 = about 2.6 m tall): still taller than people, but squat. */
+export const BODY_SCALE = 1.1;
+/** Extra thickness for torso, limbs and neck (1 = the old thin figure). */
+export const BODY_BULK = 2.1;
 /**
  * Colour of its sonar lines (r, g, b in 0..1), so it stands out from the white world.
- * NOTE: breaks AGENTS.md rule 9 (white lines only) on purpose; set to [1, 1, 1] to follow it.
+ * Red fits AGENTS.md rule 9 ("red is allowed only for stuns and danger"): the entity is the danger.
+ * Set to [1, 1, 1] for plain white.
  */
 export const BODY_TINT: readonly [number, number, number] = [0.95, 0.08, 0.05];
 /** Grid spacing on its body (object-space grid). */

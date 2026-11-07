@@ -9,7 +9,7 @@
  */
 import * as THREE from 'three';
 import { createSonarMaterial } from '../render/sonarMaterial';
-import { BODY_GRID_SIZE, BODY_HEIGHT, BODY_SCALE, BODY_TINT, STRIDE_LENGTH } from './config';
+import { BODY_BULK, BODY_GRID_SIZE, BODY_HEIGHT, BODY_SCALE, BODY_TINT, STRIDE_LENGTH } from './config';
 
 export interface EntityBody {
   root: THREE.Group;
@@ -17,21 +17,24 @@ export interface EntityBody {
   update(dt: number, position: THREE.Vector3, heading: number, speed: number): void;
 }
 
-/** The sonar shader's final line; the entity multiplies it by BODY_TINT. */
-const SONAR_OUTPUT = 'gl_FragColor = vec4(vec3(grid * min(reveal, 1.0)), 1.0);';
+/** The sonar shader's final output: `gl_FragColor = vec4(<colour expr>, 1.0);` */
+const SONAR_OUTPUT = /gl_FragColor\s*=\s*vec4\(([\s\S]+?),\s*1\.0\s*\);/;
 
-/** Tint this material's sonar lines (only the entity's copy; tiles and agents stay white). */
+/**
+ * Tint this material's sonar lines (only the entity's copy; tiles and agents stay white).
+ * Wraps whatever colour the sonar shader outputs, so red stun pings etc. still work on top.
+ */
 function tint(material: THREE.ShaderMaterial): THREE.ShaderMaterial {
   const [r, g, b] = BODY_TINT;
   if (r === 1 && g === 1 && b === 1) return material;
-  if (!material.fragmentShader.includes(SONAR_OUTPUT)) {
-    console.warn('[entity] sonar shader changed; body stays white');
+  if (!SONAR_OUTPUT.test(material.fragmentShader)) {
+    console.warn('[entity] sonar shader output not found; body stays white');
     return material;
   }
   const colour = `vec3(${r.toFixed(3)}, ${g.toFixed(3)}, ${b.toFixed(3)})`;
   material.fragmentShader = material.fragmentShader.replace(
     SONAR_OUTPUT,
-    `gl_FragColor = vec4(${colour} * (grid * min(reveal, 1.0)), 1.0);`,
+    (_m, expr: string) => `gl_FragColor = vec4(${colour} * (${expr}), 1.0);`,
   );
   return material;
 }
@@ -40,9 +43,12 @@ export function createEntityBody(): EntityBody {
   // Shared sonar material with the grid fixed to the body, so lines don't slide as it moves.
   const material = tint(createSonarMaterial({ name: 'entity', gridSpace: 'object', gridSize: BODY_GRID_SIZE }));
   const h = BODY_HEIGHT;
-  const legLen = h * 0.52;
-  const torsoLen = h * 0.22;
+  const b = BODY_BULK;
+  // Squat proportions: short thick legs, a long heavy torso, arms hanging past the knees.
+  const legLen = h * 0.42;
+  const torsoLen = h * 0.3;
   const armLen = h * 0.5;
+  const neckLen = h * 0.07;
   const hipY = legLen;
   const shoulderY = hipY + torsoLen;
 
@@ -66,28 +72,31 @@ export function createEntityBody(): EntityBody {
     return pivot;
   };
 
-  const legL = limb(0.055, legLen, 0.1, hipY);
-  const legR = limb(0.055, legLen, -0.1, hipY);
+  const legL = limb(0.055 * b, legLen, 0.1 * b, hipY);
+  const legR = limb(0.055 * b, legLen, -0.1 * b, hipY);
 
   const torso = new THREE.Group();
   torso.position.y = hipY;
   torso.rotation.x = 0.18; // hunched forward
   root.add(torso);
-  part(new THREE.CapsuleGeometry(0.13, torsoLen - 0.1, 3, 8), torso, 0, torsoLen / 2, 0);
+  const torsoR = 0.13 * b;
+  const chest = part(new THREE.CapsuleGeometry(torsoR, Math.max(0.05, torsoLen - torsoR), 3, 10), torso, 0, torsoLen / 2, 0);
+  chest.scale.z = 0.8; // broad shoulders, flatter front to back
 
-  const armL = limb(0.035, armLen, 0.21, shoulderY);
-  const armR = limb(0.035, armLen, -0.21, shoulderY);
+  const armX = torsoR + 0.04 * b;
+  const armL = limb(0.035 * b, armLen, armX, shoulderY);
+  const armR = limb(0.035 * b, armLen, -armX, shoulderY);
   armR.scale.y = 1.08; // one arm a little longer than the other
 
   const neck = new THREE.Group();
   neck.position.set(0.03, shoulderY, 0.07);
   root.add(neck);
-  part(new THREE.CylinderGeometry(0.03, 0.035, h * 0.12, 6), neck, 0, h * 0.06, 0);
+  part(new THREE.CylinderGeometry(0.03 * b, 0.035 * b, neckLen, 6), neck, 0, neckLen / 2, 0);
   const head = new THREE.Group();
-  head.position.y = h * 0.12;
+  head.position.y = neckLen;
   neck.add(head);
-  const skull = part(new THREE.SphereGeometry(0.09, 10, 8), head, 0, 0.07, 0.02);
-  skull.scale.set(0.85, 1.25, 1); // narrow and long
+  const skull = part(new THREE.SphereGeometry(0.09 * Math.sqrt(b), 10, 8), head, 0, 0.07, 0.02);
+  skull.scale.set(1.05, 0.95, 1); // small for the body, slightly wide
 
   let phase = 0;
   let twitchTimer = 2;
@@ -105,7 +114,7 @@ export function createEntityBody(): EntityBody {
       root.rotation.y = yaw;
 
       const moving = Math.min(1, speed / 1.0);
-      phase += ((speed * dt) / (STRIDE_LENGTH * BODY_SCALE)) * Math.PI * 2;
+      phase += ((speed * dt) / (STRIDE_LENGTH * BODY_SCALE * (0.42 / 0.52))) * Math.PI * 2; // shorter legs, shorter stride
       const swing = Math.sin(phase) * 0.45 * moving;
       legL.rotation.x = swing;
       legR.rotation.x = -swing;
