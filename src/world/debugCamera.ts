@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import { world } from './index';
 import { groundHeight } from '../player/collision';
+import { raycastGround } from './tiles';
 import { EYE_HEIGHT } from '../config';
 
 const WALK_SPEED = 4; // m/s
@@ -65,10 +66,10 @@ export function toggleDebugCamera(): void {
   setDebugCamera(!active);
 }
 
-/** Put the camera at eye height above the ground under it. */
+/** Put the camera at eye height above the ground under it (tile raycast; groundHeight() as fallback). */
 export function dropToEyeHeight(): void {
   const cam = world.camera.position;
-  cam.y = groundHeight(cam) + EYE_HEIGHT;
+  cam.y = (raycastGround(cam.x, cam.z) ?? groundHeight(cam)) + EYE_HEIGHT;
 }
 
 function onKeyDown(e: KeyboardEvent): void {

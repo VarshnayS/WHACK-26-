@@ -8,7 +8,8 @@
  * - GLTFExtensionsPlugin decodes Draco (decoder in public/draco/). A tiny GLTFLoader plugin skips
  *   texture decoding entirely, so tile textures are never created.
  * - ReorientationPlugin puts ORIGIN_LAT/LON at (0, 0, 0): Y up, metres, +X west, +Z north.
- * - LoadRegionPlugin masks loading to TILE_LOAD_RADIUS around the origin.
+ * - LoadRegionPlugin masks loading to the play corridor (+ CORRIDOR_TILE_MARGIN), and each loaded
+ *   tile's triangles are trimmed to that same box, so no geometry outside it is kept or drawn.
  * - Every 'load-model' event: original materials/textures are disposed, uv/colour attributes are
  *   dropped, and the mesh gets the shared sonarMaterial (or the debug grid while R is on).
  * - Copyright strings of visible tiles are kept in world.attributions and sent to the HUD.
@@ -16,21 +17,24 @@
 import * as THREE from 'three';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import type { GLTFLoaderPlugin } from 'three/addons/loaders/GLTFLoader.js';
-import { TilesRenderer, WGS84_ELLIPSOID } from '3d-tiles-renderer/three';
-import { GLTFExtensionsPlugin, LoadRegionPlugin, ReorientationPlugin, SphereRegion } from '3d-tiles-renderer/three/plugins';
+import { OBB, TilesRenderer, WGS84_ELLIPSOID } from '3d-tiles-renderer/three';
+import { GLTFExtensionsPlugin, LoadRegionPlugin, OBBRegion, ReorientationPlugin } from '3d-tiles-renderer/three/plugins';
 import { GoogleCloudAuthPlugin } from '3d-tiles-renderer/core/plugins';
 import { world } from './index';
 import { assignWorldMaterial, debugMaterial, getWorldMaterial, onRevealAllChange } from './debugMaterial';
 import { initWorldDebug } from './debugKeys';
+import { CORRIDOR_BASIS, CORRIDOR_HALF_LENGTH, isInsidePlayArea } from './playArea';
 import { setTileAttribution } from '../hud/hud';
 import { sonarMaterial } from '../render/sonarMaterial';
 import {
   AUTO_GROUND,
+  CORRIDOR_HALF_WIDTH,
+  CORRIDOR_MIN_DETAIL,
+  CORRIDOR_TILE_MARGIN,
   DRACO_PATH,
   ORIGIN_HEIGHT,
   ORIGIN_LAT,
   ORIGIN_LON,
-  TILE_LOAD_RADIUS,
   TILES_DIRECT,
   TILES_ERROR_TARGET,
   TILES_ROOT_URL,
@@ -113,6 +117,91 @@ export function applySonarMaterial(root: THREE.Object3D): void {
   });
 }
 
+// --- corridor trimming -----------------------------------------------------------------------
+
+const trimStats = { kept: 0, removed: 0 };
+const toGroup = new THREE.Matrix4();
+const vertex = new THREE.Vector3();
+
+/**
+ * Keep a triangle only if it lies wholly inside the corridor + CORRIDOR_TILE_MARGIN (plan view), or
+ * if it touches the walkable corridor itself (so there are never holes inside the walls; only such
+ * oversized triangles can reach past the margin). Vertex buffers are compacted afterwards, so
+ * geometry outside the play area is never drawn or kept.
+ * `groupMatrix` maps the tiles group's space (where the tile scenes live) into the local frame.
+ */
+function trimToCorridor(scene: THREE.Object3D, groupMatrix: THREE.Matrix4): void {
+  scene.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const geometry = mesh.geometry;
+    const position = geometry.getAttribute('position');
+    if (!position) return;
+
+    // mesh space -> tiles group space -> local frame
+    toGroup.identity();
+    for (let o: THREE.Object3D | null = mesh; o; o = o === scene ? null : o.parent) {
+      o.updateMatrix();
+      toGroup.premultiply(o.matrix);
+    }
+    toGroup.premultiply(groupMatrix);
+
+    const vertexCount = position.count;
+    // bit 1: within corridor + margin; bit 2: inside the walls
+    const flags = new Uint8Array(vertexCount);
+    for (let i = 0; i < vertexCount; i++) {
+      vertex.fromBufferAttribute(position, i).applyMatrix4(toGroup);
+      flags[i] = (isInsidePlayArea(vertex, CORRIDOR_TILE_MARGIN) ? 1 : 0) | (isInsidePlayArea(vertex) ? 2 : 0);
+    }
+
+    const index = geometry.getIndex();
+    const triangleCount = index ? index.count / 3 : vertexCount / 3;
+    const kept: number[] = [];
+    for (let t = 0; t < triangleCount; t++) {
+      const a = index ? index.getX(3 * t) : 3 * t;
+      const b = index ? index.getX(3 * t + 1) : 3 * t + 1;
+      const c = index ? index.getX(3 * t + 2) : 3 * t + 2;
+      const allNearCorridor = (flags[a] & flags[b] & flags[c] & 1) !== 0;
+      const touchesPlayArea = ((flags[a] | flags[b] | flags[c]) & 2) !== 0;
+      if (allNearCorridor || touchesPlayArea) kept.push(a, b, c);
+    }
+    trimStats.kept += kept.length / 3;
+    trimStats.removed += triangleCount - kept.length / 3;
+    if (kept.length / 3 === triangleCount) return; // tile wholly inside
+
+    if (kept.length === 0) {
+      mesh.visible = false;
+      geometry.setIndex([]);
+      return;
+    }
+
+    // Compact: keep only referenced vertices (plain attributes only; otherwise just re-index).
+    const attributes = Object.values(geometry.attributes);
+    const compactable = attributes.every((attr) => (attr as THREE.BufferAttribute).isBufferAttribute);
+    if (!compactable) {
+      geometry.setIndex(kept);
+      return;
+    }
+    const remap = new Int32Array(vertexCount).fill(-1);
+    let next = 0;
+    const newIndex = kept.map((v) => (remap[v] === -1 ? (remap[v] = next++) : remap[v]));
+    for (const [name, attr] of Object.entries(geometry.attributes) as [string, THREE.BufferAttribute][]) {
+      const size = attr.itemSize;
+      const Ctor = attr.array.constructor as new (n: number) => THREE.TypedArray;
+      const array = new Ctor(next * size);
+      for (let v = 0; v < vertexCount; v++) {
+        const to = remap[v];
+        if (to < 0) continue;
+        for (let k = 0; k < size; k++) array[to * size + k] = attr.array[v * size + k];
+      }
+      geometry.setAttribute(name, new THREE.BufferAttribute(array, size, attr.normalized));
+    }
+    geometry.setIndex(newIndex);
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+  });
+}
+
 // --- ground levelling ------------------------------------------------------------------------
 
 const raycaster = new THREE.Raycaster();
@@ -125,16 +214,25 @@ const SAMPLE_OFFSETS: ReadonlyArray<[number, number]> = [
   [0, -4],
 ];
 
+/**
+ * Height (y) of the lowest tile surface under (x, z) in the local frame, i.e. the ground rather than
+ * tree canopy or a roof; null if no tile is loaded there. Debug/tools helper (one raycast per call).
+ */
+export function raycastGround(x: number, z: number): number | null {
+  if (!tiles) return null;
+  raycaster.set(new THREE.Vector3(x, 1000, z), DOWN);
+  raycaster.far = 3000;
+  const hits = raycaster.intersectObject(tiles.group, true);
+  return hits.length > 0 ? hits[hits.length - 1].point.y : null;
+}
+
 /** Raycast straight down near the origin and shift the tiles so the ground there is y = 0. */
 function levelGround(): void {
   if (!tiles) return;
   const heights: number[] = [];
   for (const [x, z] of SAMPLE_OFFSETS) {
-    raycaster.set(new THREE.Vector3(x, 1000, z), DOWN);
-    raycaster.far = 3000;
-    const hits = raycaster.intersectObject(tiles.group, true);
-    // lowest surface under the point = ground (not tree canopy or a roof)
-    if (hits.length > 0) heights.push(hits[hits.length - 1].point.y);
+    const y = raycastGround(x, z);
+    if (y !== null) heights.push(y);
   }
   if (heights.length === 0) return;
   heights.sort((a, b) => a - b);
@@ -180,11 +278,22 @@ export function initTiles(): void {
   t.registerPlugin(new GLTFExtensionsPlugin({ dracoLoader, plugins: [skipTexturesPlugin] }));
   t.registerPlugin(new ReorientationPlugin({ lat, lon, height: ORIGIN_HEIGHT, recenter: true }));
 
-  // Only load tiles inside TILE_LOAD_RADIUS. The sphere lives in the tileset's own frame (ECEF).
-  // errorTarget Infinity: the region only masks, it never forces extra detail.
-  const centre = WGS84_ELLIPSOID.getCartographicToPosition(lat, lon, ORIGIN_HEIGHT, new THREE.Vector3());
+  // Only load tiles that touch the corridor + margin. The OBB lives in the tileset's own frame
+  // (ECEF): local frame -> ECEF is the same ellipsoid frame ReorientationPlugin inverts.
+  // Region errorTarget = CORRIDOR_MIN_DETAIL: tiles in the corridor refine until geometricError <=
+  // CORRIDOR_MIN_DETAIL even when off-screen (in-view tiles still use the camera error if larger).
+  const localToEcef = WGS84_ELLIPSOID.getObjectFrame(lat, lon, ORIGIN_HEIGHT, 0, 0, 0, new THREE.Matrix4());
+  const halfAcross = CORRIDOR_HALF_WIDTH + CORRIDOR_TILE_MARGIN;
+  const halfAlong = CORRIDOR_HALF_LENGTH + CORRIDOR_TILE_MARGIN;
+  const corridorBox = new THREE.Box3(new THREE.Vector3(-halfAcross, -100, -halfAlong), new THREE.Vector3(halfAcross, 300, halfAlong));
   const regions = new LoadRegionPlugin();
-  regions.addRegion(new SphereRegion({ sphere: new THREE.Sphere(centre, TILE_LOAD_RADIUS), mask: true, errorTarget: Infinity }));
+  regions.addRegion(
+    new OBBRegion({
+      obb: new OBB(corridorBox, localToEcef.multiply(CORRIDOR_BASIS)),
+      mask: true,
+      errorTarget: CORRIDOR_MIN_DETAIL,
+    }),
+  );
   t.registerPlugin(regions);
 
   t.errorTarget = TILES_ERROR_TARGET;
@@ -195,6 +304,8 @@ export function initTiles(): void {
   world.tilesGroup.add(groundGroup);
 
   t.addEventListener('load-model', ({ scene }) => {
+    t.group.updateWorldMatrix(true, false);
+    trimToCorridor(scene, t.group.matrixWorld);
     applySonarMaterial(scene);
     if (firstLoadTime < 0) firstLoadTime = performance.now();
   });
@@ -236,8 +347,9 @@ export function getTiles(): TilesRenderer | null {
 }
 
 /** Small summary for the debug readout. */
-export function getTileStats(): { visible: number; loading: boolean } {
-  if (!tiles) return { visible: 0, loading: false };
+export function getTileStats(): { visible: number; loading: boolean; trianglesKept: number; trianglesTrimmed: number } {
+  const trim = { trianglesKept: trimStats.kept, trianglesTrimmed: trimStats.removed };
+  if (!tiles) return { visible: 0, loading: false, ...trim };
   const loading = (tiles as unknown as { loadProgress?: number }).loadProgress;
-  return { visible: tiles.visibleTiles.size, loading: loading !== undefined && loading < 1 };
+  return { visible: tiles.visibleTiles.size, loading: loading !== undefined && loading < 1, ...trim };
 }
