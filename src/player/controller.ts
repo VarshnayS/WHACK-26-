@@ -36,7 +36,7 @@ const GROUND_SMOOTHING = 20;      // 1/s, smooths Y over small bumps (still "glu
 const WALL_PUSH_OUT_DISTANCE = 0.3; // if closer than this to a wall, nudge away from it
 
 /** Set to false when real terrain (world.tilesGroup) is ready. */
-const USE_TEST_GEOMETRY = true;
+const USE_TEST_GEOMETRY = false;
 
 // ---------------------------------------------------------------------------
 // Public types
