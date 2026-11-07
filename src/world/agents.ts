@@ -36,6 +36,7 @@ import { isDebugCameraActive } from './debugCamera';
 import { getPlayerController } from '../player/controller';
 import { PLAYER_HEIGHT } from '../player/collision';
 import { CAR_COUNT, PEDESTRIAN_COUNT } from '../config';
+import type { AuditApi } from './audit/log';
 
 const PEDESTRIAN_HIGHWAYS = ['footway', 'pedestrian', 'path', 'steps'] as const;
 /** Only spawn on connected path networks at least this long (clipping leaves short isolated stubs). */
@@ -197,6 +198,38 @@ function emitAgentNoise(position: THREE.Vector3, loudness: number): void {
   // is ever added to the contract, this starts calling it too.
   const w = world as World & { emitNoise?: (position: THREE.Vector3, loudness: number) => void };
   w.emitNoise?.(position, loudness);
+}
+
+// --- audit -------------------------------------------------------------------------------------
+
+type WorldWithAudit = World & {
+  audit?: Pick<AuditApi, 'log'>;
+};
+
+/**
+ * Record a collision between the player and an agent.
+ *
+ * hit: 'car' or 'pedestrian'
+ * impactSpeed: relative closing speed along the contact normal
+ * normal: direction from the agent towards the player
+ * position: player's position at the moment of impact
+ */
+function logAgentCollision(
+  hit: 'car' | 'pedestrian',
+  impactSpeed: number,
+  normal: THREE.Vector3,
+  position: THREE.Vector3,
+): void {
+  const audit = (world as WorldWithAudit).audit;
+
+  if (!audit) return;
+
+  audit.log({
+    hit,
+    position,
+    impactSpeed: Math.max(0, impactSpeed),
+    normal,
+  });
 }
 
 // --- paths -------------------------------------------------------------------------------------
@@ -888,11 +921,15 @@ function updatePlayerContacts(dt: number): void {
 
     const carSpeed = Math.hypot(a.velocity.x, a.velocity.z);
     const total = carSpeed + pSpeed; // impulse scales with both speeds, so even a standing player is flung
+    // Actual relative closing speed along the collision normal.
+    // Used for audit; total remains the gameplay fling strength.
+    const carClosingSpeed = Math.max(0, (a.velocity.x - pvx) * n.x + (a.velocity.z - pvz) * n.z);
     impulse.set(0, 0, 0).addScaledVector(n, CAR_FLING_NORMAL_GAIN * total).addScaledVector(a.velocity, CAR_FLING_CARRY);
     impulse.y = 0;
     if (impulse.length() > CAR_FLING_MAX) impulse.setLength(CAR_FLING_MAX);
     controller.applyImpulse(impulse, { impactSpeed: total, forceStun: true });
-    playerAgentCollision('car', contactPointFor(pos, n, a.position.y), total, n);
+    // Record the car collision.
+    logAgentCollision('car',carClosingSpeed,n,pos);
     emitAgentNoise(a.position, NOISE_CAR);
   }
 
@@ -927,7 +964,8 @@ function updatePlayerContacts(dt: number): void {
     const push = THREE.MathUtils.clamp(PED_PUSH_RESTITUTION * closing, PED_PUSH_MIN, PED_PUSH_MAX);
     impulse.set(n.x * push, 0, n.z * push);
     controller.applyImpulse(impulse, { impactSpeed: closing });
-    playerAgentCollision('pedestrian', contactPointFor(pos, n, a.position.y), closing, n);
+    // Record the pedestrian collision.
+    logAgentCollision('pedestrian',closing,n,pos);
     knockWalker(w, n.x, n.z, push);
     emitAgentNoise(a.position, NOISE_PEDESTRIAN);
   }

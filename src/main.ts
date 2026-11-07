@@ -13,8 +13,8 @@ import { initController } from './player/controller';
 import { initHud } from './hud/hud';
 import { initMic } from './audio'; // C: initAudioSonar(world)
 import { updatePings } from './render/pings';
+import { initAudit } from './world/audit/log';
 import { initSoundSources } from './world/soundSources';
-import { initAudit } from './audit';
 import { initSenses } from './senses';
 import { initEntity } from './entity';
 
@@ -39,6 +39,7 @@ async function start(): Promise<void> {
   initTiles(); // A
   await initAgents(); // A
   initController(); // C
+  initAudit(world); // audit: world.audit + V report + J test events
   void initMic(); // C (waits for a user gesture itself)
   initSoundSources(world); // stub: sound sources (src/world/soundSources.ts)
   initAudit(world); // stub: scoring / accessibility audit (src/audit/)
