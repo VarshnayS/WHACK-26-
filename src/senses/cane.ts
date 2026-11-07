@@ -62,7 +62,7 @@ const raycaster = new THREE.Raycaster();
 
 let initialised = false;
 
-/** Live cane state for the HUD indicator (src/hud/caneIndicator.ts). Read-only outside this file. */
+/** Live cane state (the soundscape reads tapSerial). Read-only outside this file. */
 export interface CaneState {
   held: boolean;
   /** Sweep angle in radians, + = to the player's left, within ±halfArc. */
