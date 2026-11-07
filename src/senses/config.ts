@@ -26,6 +26,11 @@ export const IDLE_PULSE_RANGE = 1.5;
 
 // --- cane (src/senses/cane.ts) -------------------------------------------------------------------
 
+/**
+ * true = the cane is out and sweeping on its own from the start; C toggles it away / back out.
+ * false = old behaviour: hold C (or right mouse) to sweep. Right mouse always holds it out.
+ */
+export const CANE_AUTO_SWEEP = true;
 /** Horizontal reach of the cane tip in front of the feet (m). */
 export const CANE_REACH = 1.2;
 /** Full sweep arc (degrees), centred on where the player faces. */

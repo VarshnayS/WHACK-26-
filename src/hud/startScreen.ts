@@ -138,7 +138,7 @@ export function initStartScreen(hud: HTMLElement): void {
   const controls = document.createElement('div');
   controls.style.cssText = 'max-width:640px;opacity:0.85;font-size:13px;';
   controls.textContent =
-    'WASD walk · mouse look · speak, clap or SPACE to send sonar · hold C or right mouse for the cane, V to tap it · ' +
+    'WASD walk · mouse look · speak, clap or SPACE to send sonar · the cane sweeps on its own (C to put it away / take it out), V to tap it · ' +
     'O vision · U mute sound';
 
   const barWrap = document.createElement('div');
