@@ -2,6 +2,9 @@
 //
 // First-person controller: WASD + mouse look (PointerLockControls), momentum,
 // raycast ground-following, wall sliding, rebound, and the collision "stun" penalty.
+// Walking tops out at WALK_SPEED; hold Shift (or click L3 on a controller) to run up to MAX_SPEED.
+// A controller feeds analogue movement through setPadInput() (src/player/gamepad.ts); the stick's
+// deflection scales the top speed. onPlayerImpact() reports every bump and stun (haptics).
 
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
@@ -18,6 +21,7 @@ import {
   type CollisionHit,
 } from './collision';
 import { createStunEffect } from './stunEffect';
+import { recordAudit } from './auditRecord';
 import { clampToPlayArea, isInsidePlayArea } from '../world/playArea';
 
 
@@ -25,7 +29,8 @@ import { clampToPlayArea, isInsidePlayArea } from '../world/playArea';
 // Tuning
 // ---------------------------------------------------------------------------
 
-const MAX_SPEED = 5.5;          // m/s, cap (a brisk run)
+const MAX_SPEED = 5.5;          // m/s, cap while running (Shift / L3)
+const WALK_SPEED = 1.8;         // m/s, cap while walking
 const ACCELERATION = 3.0;       // m/s^2 while a key is held (~1.8 s to reach max)
 const DECELERATION = 4.0;       // m/s^2 friction when no key is held (~1.4 s to stop)
 const TURN_FRICTION = 4.0;      // 1/s, bleeds sideways velocity so direction changes feel responsive
@@ -85,6 +90,29 @@ export interface StunnedPayload {
   source: 'wall' | 'impulse';
 }
 
+/** A bump or stun, for haptics. `level` is the stun effect's intensity (the existing impact score). */
+export interface PlayerImpact {
+  /** 0..1: BUMP_EFFECT_INTENSITY (0.25) for a light knock, 0.5..1 for a stun (0.5 + 0.5 t). */
+  level: number;
+  stunned: boolean;
+  /** m/s along the contact normal. */
+  impactSpeed: number;
+  source: StunnedPayload['source'];
+  /** applyImpulse(..., { forceStun: true }): only car hits do this. */
+  forced: boolean;
+}
+type ImpactFn = (impact: PlayerImpact) => void;
+const impactListeners = new Set<ImpactFn>();
+
+/** Called on every bump and stun (walls, pedestrians, cars). Returns unsubscribe. */
+export function onPlayerImpact(fn: ImpactFn): () => void {
+  impactListeners.add(fn);
+  return () => impactListeners.delete(fn);
+}
+function notifyImpact(impact: PlayerImpact): void {
+  for (const fn of impactListeners) fn(impact);
+}
+
 export interface PlayerController {
   controls: PointerLockControls;
   /** Current horizontal speed in m/s. */
@@ -100,6 +128,11 @@ export interface PlayerController {
   isStunned(): boolean;
   /** Clear stun, velocity, held keys and the daze effect (used when a run restarts). */
   reset(): void;
+  /**
+   * Analogue movement from a controller: x = strafe right, z = forward, each -1..1 (deadzone already
+   * applied; the length sets the top speed). `run` = L3. Works without pointer lock. Keyboard wins.
+   */
+  setPadInput(x: number, z: number, run: boolean): void;
   /**
    * Teleport to `position` (x/z; y snaps to the ground), stop, clear any stun, and face `lookAt`
    * if given (level gaze). Clamped inside the corridor walls. Used for the route's start point.
@@ -157,6 +190,9 @@ export function initController(options: ControllerOptions = {}): PlayerControlle
 
   let enabled = true;
   let stunTimer = 0;
+  let padX = 0;
+  let padZ = 0;
+  let padRun = false;
 
   // Collision targets
   if (USE_TEST_GEOMETRY) {
@@ -251,7 +287,10 @@ function resolveWalls(pos: THREE.Vector3): number {
    */
   function stunFromImpact(impactSpeed: number, force: boolean): void {
     if (impactSpeed < STUN_SPEED_THRESHOLD && !force) {
-      if (impactSpeed >= REBOUND_MIN_IMPACT) effect.trigger(BUMP_EFFECT_DURATION, BUMP_EFFECT_INTENSITY);
+      if (impactSpeed >= REBOUND_MIN_IMPACT) {
+        effect.trigger(BUMP_EFFECT_DURATION, BUMP_EFFECT_INTENSITY);
+        notifyImpact({ level: BUMP_EFFECT_INTENSITY, stunned: false, impactSpeed, source: 'impulse', forced: false });
+      }
       return;
     }
     const t = THREE.MathUtils.clamp(
@@ -265,6 +304,7 @@ function resolveWalls(pos: THREE.Vector3): number {
     options.onStunned?.(duration, impactSpeed);
     // agents.ts / SOUND already fire the red impact ping and the audit record for agent hits
     emitStunned(duration, impactSpeed, 0.5 + 0.5 * t, camera.position, 'impulse');
+    notifyImpact({ level: 0.5 + 0.5 * t, stunned: true, impactSpeed, source: 'impulse', forced: force });
   }
 
   function emitStunned(
@@ -280,7 +320,7 @@ function resolveWalls(pos: THREE.Vector3): number {
 
   /** Wall/tile hit: audit record (contract: SENSES records wall collisions) + red ring on a stun. */
   function wallHit(impactSpeed: number, stunned: boolean): void {
-    world.audit.record({
+    recordAudit(world, {
       kind: 'collision',
       hit: 'building',
       position: lastPoint.clone(),
@@ -309,8 +349,18 @@ function resolveWalls(pos: THREE.Vector3): number {
       pos.z += velocity.z * dt;
     } else {
       // ---- 1. Input -> wish direction (relative to where the camera faces) ----
-      const ix = controls.isLocked ? axis('KeyD', 'KeyA') : 0;
-      const iz = controls.isLocked ? axis('KeyW', 'KeyS') : 0;
+      const locked = controls.isLocked;
+      let ix = locked ? axis('KeyD', 'KeyA') : 0;
+      let iz = locked ? axis('KeyW', 'KeyS') : 0;
+      let amount = 1; // 0..1, scales the top speed (analogue stick)
+      let run = locked && (keys.has('ShiftLeft') || keys.has('ShiftRight'));
+      if (ix === 0 && iz === 0) {
+        ix = padX;
+        iz = padZ;
+        amount = Math.min(1, Math.hypot(ix, iz));
+        run = padRun;
+      }
+      const cap = (run ? MAX_SPEED : WALK_SPEED) * amount;
 
       euler.setFromQuaternion(camera.quaternion);
       forward.set(0, 0, -1).applyAxisAngle(UP, euler.y);
@@ -325,9 +375,15 @@ function resolveWalls(pos: THREE.Vector3): number {
         lateral.copy(velocity).addScaledVector(wish, -along);
         lateral.multiplyScalar(Math.max(0, 1 - TURN_FRICTION * dt));
         velocity.copy(lateral).addScaledVector(wish, along);
-        // Speed builds up the longer the key is held.
-        velocity.addScaledVector(wish, ACCELERATION * dt);
-        if (velocity.length() > MAX_SPEED) velocity.setLength(MAX_SPEED);
+        const speed = velocity.length();
+        if (speed > cap) {
+          // e.g. let go of Shift / eased off the stick: slow down to the new top speed
+          velocity.setLength(Math.max(cap, speed - DECELERATION * dt));
+        } else {
+          // Speed builds up the longer the key is held.
+          velocity.addScaledVector(wish, ACCELERATION * dt);
+          if (velocity.length() > cap) velocity.setLength(cap);
+        }
       } else {
         const speed = velocity.length();
         if (speed > 0) {
@@ -360,9 +416,11 @@ function resolveWalls(pos: THREE.Vector3): number {
         options.onStunned?.(duration, impactSpeed);
         wallHit(impactSpeed, true);
         emitStunned(duration, impactSpeed, 0.5 + 0.5 * t, lastPoint, 'wall');
+        notifyImpact({ level: 0.5 + 0.5 * t, stunned: true, impactSpeed, source: 'wall', forced: false });
       } else if (impactSpeed >= REBOUND_MIN_IMPACT) {
         effect.trigger(BUMP_EFFECT_DURATION, BUMP_EFFECT_INTENSITY); // light bump: small wobble
         wallHit(impactSpeed, false);
+        notifyImpact({ level: BUMP_EFFECT_INTENSITY, stunned: false, impactSpeed, source: 'wall', forced: false });
       }
 
       // ---- 6. Apply horizontal movement ----
@@ -399,6 +457,11 @@ function resolveWalls(pos: THREE.Vector3): number {
       velocity.set(0, 0, 0);
       keys.clear();
       effect.reset();
+    },
+    setPadInput(x, z, run) {
+      padX = x;
+      padZ = z;
+      padRun = run;
     },
     placeAt(position, lookAt) {
       const pos = camera.position;
