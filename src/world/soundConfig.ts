@@ -2,21 +2,32 @@
  * src/world/soundConfig.ts: constants for the SOUND module only (pings + world sound sources).
  * Owner: SOUND (feat/sound-sources). Plain constants only.
  *
- * Everything is drawn white on black: a style only changes speed, ring thickness, brightness and
- * how fast the ring fades after it passes. Tune here, nowhere else.
+ * Everything is drawn white on black (AGENTS.md rule 9): a style changes speed, ring thickness,
+ * brightness and how fast the ring fades after it passes. A style may also carry a `color`, which
+ * src/render/pingColors.ts honours (render-side extension of PingStyle); only grey shades are used
+ * here, so no new colour is introduced. Tune here, nowhere else.
  */
 import type { PingStyle, PingType } from '../shared/contracts';
 import { PED_PING_BRIGHTNESS, PED_PING_RANGE, PED_PING_RADIUS, VOICE_FADE } from '../config';
 
 // --- ping look per type ------------------------------------------------------------------------
 
-export const PING_STYLES: Readonly<Record<PingType, Readonly<PingStyle>>> = {
+/** Linear RGB 0..1. Grey = equal channels below 1, so the cane reads apart from white pings. */
+export type PingRgb = readonly [number, number, number];
+
+/** PingStyle plus the optional render-side `color` (see header). */
+export type SoundPingStyle = PingStyle & { color?: PingRgb };
+
+/** Cane rings and the lines they reveal are dim grey instead of white (1 = white, 0 = invisible). */
+export const CANE_GREY = 0.5;
+
+export const PING_STYLES: Readonly<Record<PingType, Readonly<SoundPingStyle>>> = {
   /** Player's voice / clap: big, bright, slow enough to read the street. */
   voice: { speed: 30, thickness: 1.2, brightness: 1.0, fade: VOICE_FADE },
   /** Player's own footsteps: faint, short (callers use ~2–5 m ranges). */
   footstep: { speed: 12, thickness: 0.3, brightness: 0.35, fade: 2.5 },
-  /** Cane tap: tiny, sharp, quick. */
-  cane: { speed: 15, thickness: 0.12, brightness: 0.85, fade: 4 },
+  /** Cane tap: tiny, sharp, quick, and dim grey so it stands apart from voice/footstep rings. */
+  cane: { speed: 15, thickness: 0.12, brightness: 0.85, fade: 4, color: [CANE_GREY, CANE_GREY, CANE_GREY] },
   /** Car engine: medium, periodic. */
   car: { speed: 20, thickness: 0.6, brightness: 0.55, fade: 1.5 },
   /** Other people's footsteps: faint. */
