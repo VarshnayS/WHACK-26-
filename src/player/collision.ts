@@ -11,6 +11,7 @@
 //   initCollisionTestGeometry  -> temporary flat ground + random box walls
 
 import * as THREE from 'three';
+import { world } from '../world';
 
 /** Eye height above the ground, in metres. */
 export const PLAYER_HEIGHT = 1.7;
@@ -45,7 +46,8 @@ export interface CollisionHit {
 // Collision targets
 // ---------------------------------------------------------------------------
 
-let targets: THREE.Object3D[] = [];
+/** Solid objects. Defaults to the real world: raycasts hit world.tilesGroup only (never agents). */
+let targets: THREE.Object3D[] = [world.tilesGroup];
 
 /** Set the objects the player collides with. For the real game use [world.tilesGroup]. */
 export function setCollisionTargets(objects: THREE.Object3D[]): void {
@@ -69,12 +71,20 @@ const DOWN = new THREE.Vector3(0, -1, 0);
  * Controller sets camera Y = groundHeight(pos) + PLAYER_HEIGHT.
  */
 export function groundHeight(pos: THREE.Vector3): number {
+  return groundHeightOrNull(pos) ?? 0;
+}
+
+/**
+ * Same as groundHeight() but returns null when the ray hits nothing (tiles not loaded there yet),
+ * so callers can tell "no ground" from "ground at y = 0". Used to build the agents' height grid.
+ */
+export function groundHeightOrNull(pos: THREE.Vector3): number | null {
   tmpOrigin.set(pos.x, pos.y + GROUND_RAY_START_OFFSET, pos.z);
   raycaster.set(tmpOrigin, DOWN);
   raycaster.near = 0;
   raycaster.far = Infinity;
   const hits = raycaster.intersectObjects(targets, true);
-  return hits.length > 0 ? hits[0].point.y : 0;
+  return hits.length > 0 ? hits[0].point.y : null;
 }
 
 // ---------------------------------------------------------------------------
