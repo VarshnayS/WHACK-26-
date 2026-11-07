@@ -6,15 +6,19 @@
  * Every module plugs in through this object (see README "Plugging in").
  * Changing a field or signature here breaks other people's code, so discuss it first.
  * Adding a new optional field is fine; renaming or removing one is not.
+ *
+ * Coordinates: Y up, metres, +X = west, +Z = north, origin at ORIGIN_LAT/LON, ground ≈ y 0.
  */
 import * as THREE from 'three';
-import { addPing } from '../render/pings';
+import { addPing, now, type Ping } from '../render/pings';
+import { MAX_PINGS } from '../render/sonarMaterial';
+import { CAMERA_FAR, CAMERA_NEAR, EYE_HEIGHT, WAVE_SPEED } from '../config';
 
 export type AgentType = 'pedestrian' | 'car';
 
 export interface Agent {
   type: AgentType;
-  /** World-space position in metres (local frame centred on ORIGIN_LAT/LON). */
+  /** World-space position of the agent's base (on the ground), in metres. */
   position: THREE.Vector3;
   /** Metres per second. */
   velocity: THREE.Vector3;
@@ -39,6 +43,16 @@ export interface World {
   readonly agentsGroup: THREE.Group;
   /** Live agent list (filled by src/world/agents.ts). */
   readonly agents: Agent[];
+  /**
+   * Pings fired in the last few seconds, oldest first (at most MAX_PINGS). Kept here as well as
+   * in src/render/pings.ts so other modules (e.g. entity AI: "last noise position") can read them.
+   */
+  readonly pings: Ping[];
+  /**
+   * Copyright strings of the Google tiles currently on screen, most common first
+   * (updated in place by src/world/tiles.ts). The HUD must show these with the Google logo.
+   */
+  readonly attributions: string[];
   /** Fire a sonar wave from `origin` that travels up to `range` metres. */
   ping(origin: THREE.Vector3, range: number): void;
   /** Register a per-frame callback. Returns a function that unregisters it. */
@@ -50,13 +64,16 @@ const updateFns = new Set<UpdateFn>();
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 5000);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, CAMERA_NEAR, CAMERA_FAR);
+camera.position.set(0, EYE_HEIGHT, 0);
 
 const tilesGroup = new THREE.Group();
 tilesGroup.name = 'tiles';
 const agentsGroup = new THREE.Group();
 agentsGroup.name = 'agents';
-scene.add(tilesGroup, agentsGroup);
+scene.add(tilesGroup, agentsGroup, camera);
+
+const pings: Ping[] = [];
 
 export const world: World = {
   scene,
@@ -65,8 +82,12 @@ export const world: World = {
   tilesGroup,
   agentsGroup,
   agents: [],
+  pings,
+  attributions: [],
   ping(origin, range) {
-    addPing(origin, range);
+    pings.push({ origin: origin.clone(), range, start: now() });
+    if (pings.length > MAX_PINGS) pings.shift();
+    addPing(origin, range); // src/render/pings.ts feeds the sonar material uniforms
   },
   onUpdate(fn) {
     updateFns.add(fn);
@@ -74,7 +95,18 @@ export const world: World = {
   },
 };
 
+/** Drop pings whose wave has finished travelling (plus a short fade). */
+function expirePings(): void {
+  const t = now();
+  while (pings.length > 0) {
+    const p = pings[0];
+    if (t - p.start <= p.range / WAVE_SPEED + 2) break;
+    pings.shift();
+  }
+}
+
 /** Runs every registered onUpdate callback. Called only by the main loop in src/main.ts. */
 export function runUpdates(dt: number): void {
+  expirePings();
   for (const fn of updateFns) fn(dt);
 }
