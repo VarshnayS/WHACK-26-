@@ -4,20 +4,28 @@
  * Branch: feat/world-foundation
  *
  * - Adds the API key server-side (the browser never sees it).
- * - Caches every tile by URL path in tile-cache/ (query strings such as `session` are ignored,
- *   so tiles cached in one session keep working in the next).
- * - Online (OFFLINE=0): root.json is ALWAYS fetched fresh from Google (new session token) and the
- *   cached copy is updated. Other files are served from cache, or fetched and cached on a miss.
+ * - Caches every file by URL path in tile-cache/ (the `session` query string is ignored).
+ * - IMPORTANT: Google's tile file paths are different in every session (the opaque ids in
+ *   .../files/<id>.glb change with the session), so the cache only "joins up" within one session.
+ *   That's why the proxy keeps ONE session for as long as it is valid:
+ * - Online (OFFLINE=0): root.json is fetched fresh from Google when there is no session younger than
+ *   SESSION_MAX_AGE_MIN (default 150 min; Google sessions last ~3 h). Within that window every page
+ *   load, and every proxy restart, reuses the same root.json, so tiles are cache hits. When a new
+ *   session starts, the previous cached root.json is kept as root.<timestamp>.json (see below).
+ *   Other files are served from cache, or fetched and cached on a miss.
  * - Offline (OFFLINE=1): everything, including root.json, is served from cache only.
- *   Each miss is logged as `[offline miss] <path>`.
+ *   Each miss is logged as `[offline miss] <path>`. Offline only reaches tiles fetched in the session
+ *   of the cached root.json: to go back to an older warmed session, copy its
+ *   tile-cache/v1/3dtiles/root.<timestamp>.json over root.json.
  *
  * Run: node --env-file=.env proxy/cache-proxy.mjs   (or npm run proxy / npm run dev:all)
- * Env: GOOGLE_MAPS_KEY, PORT (default 8787), OFFLINE (0/1)
+ * Env: GOOGLE_MAPS_KEY, PORT (default 8787), OFFLINE (0/1),
+ *      SESSION_MAX_AGE_MIN (default 150; 0 = new session on every root.json request)
  *
  * NEVER log the key or put it in a response. Log paths only, never full upstream URLs.
  */
 import http from 'node:http';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,9 +39,12 @@ const UPSTREAM_TIMEOUT_MS = 30_000;
 const KEY = (process.env.GOOGLE_MAPS_KEY ?? '').trim();
 const PORT = Number(process.env.PORT) || 8787;
 const OFFLINE = process.env.OFFLINE === '1';
+const SESSION_MAX_AGE_MS = Math.max(0, Number(process.env.SESSION_MAX_AGE_MIN ?? 150)) * 60_000;
 
-/** Latest session token from a fresh root.json; added to tile requests that don't carry one. */
+/** Session token of the current root.json; added to tile requests that don't carry one. */
 let currentSession = null;
+/** When the current session's root.json was fetched from Google (ms since epoch). */
+let sessionStartedAt = 0;
 /** De-duplicates concurrent upstream fetches of the same path. */
 const inFlight = new Map();
 const stats = { served: 0, hits: 0, fetched: 0, misses: 0, errors: 0 };
@@ -110,6 +121,43 @@ async function fetchUpstream(urlPath, search) {
   return { status: res.status, body, type: res.headers.get('content-type') ?? 'application/octet-stream' };
 }
 
+function sessionIsFresh() {
+  return currentSession !== null && Date.now() - sessionStartedAt < SESSION_MAX_AGE_MS;
+}
+
+function minutesOld(ms) {
+  return Math.round((Date.now() - ms) / 60_000);
+}
+
+/** Keep the previous session's root.json (its tiles are only reachable through it). */
+async function backupRoot(file) {
+  try {
+    const { mtimeMs } = await stat(file);
+    const stamp = new Date(mtimeMs).toISOString().replace(/[:.]/g, '-');
+    const backup = file.replace(/root\.json$/, `root.${stamp}.json`);
+    await rename(file, backup);
+    console.log(`[session] previous root.json kept as ${path.relative(ROOT_DIR, backup)}`);
+  } catch {
+    /* no previous root.json */
+  }
+}
+
+/** At startup (online), adopt the cached root.json's session if it is still young enough. */
+async function adoptCachedSession() {
+  const file = cacheFileFor(ROOT_PATH);
+  try {
+    const { mtimeMs } = await stat(file);
+    if (Date.now() - mtimeMs >= SESSION_MAX_AGE_MS) return;
+    const session = extractSession((await readFile(file)).toString('utf8'));
+    if (!session) return;
+    currentSession = session;
+    sessionStartedAt = mtimeMs;
+    console.log(`[session] reusing the cached root.json session (${minutesOld(mtimeMs)} min old)`);
+  } catch {
+    /* nothing cached yet */
+  }
+}
+
 /** Fetch + cache a path, sharing one upstream request between concurrent callers. */
 function fetchAndCache(urlPath, search, file) {
   const existing = inFlight.get(urlPath);
@@ -120,7 +168,12 @@ function fetchAndCache(urlPath, search, file) {
     if (result.status === 200) {
       if (urlPath === ROOT_PATH) {
         const session = extractSession(result.body.toString('utf8'));
-        if (session) currentSession = session;
+        if (session) {
+          currentSession = session;
+          sessionStartedAt = Date.now();
+        }
+        await backupRoot(file);
+        console.log('[session] new Google session started (tiles cached from now on belong to it)');
       }
       await writeCache(file, result.body);
       stats.fetched++;
@@ -171,12 +224,12 @@ async function handle(req, res) {
   stats.served++;
   statsDirty = true;
 
-  // Online: root.json is never served from cache, so the session token is always fresh.
-  if (!OFFLINE && !isRoot) {
+  // Online: tiles come from cache when present; root.json only while its session is fresh.
+  if (!OFFLINE && (!isRoot || sessionIsFresh())) {
     const cached = await readCache(file);
     if (cached) {
       stats.hits++;
-      send(req, res, 200, cached, contentTypeFor(file));
+      send(req, res, 200, cached, contentTypeFor(file), isRoot ? { 'Cache-Control': 'no-store' } : {});
       return;
     }
   }
@@ -200,8 +253,8 @@ async function handle(req, res) {
     return;
   }
 
-  // Before the first root.json of this proxy run there is no session; get one first.
-  if (!isRoot && !currentSession && !new URLSearchParams(search).has('session')) {
+  // No valid session yet (or it expired): get one before fetching tiles.
+  if (!isRoot && !sessionIsFresh() && !new URLSearchParams(search).has('session')) {
     await fetchAndCache(ROOT_PATH, '', cacheFileFor(ROOT_PATH)).catch(() => undefined);
   }
 
@@ -231,6 +284,8 @@ server.on('error', (err) => {
   }
   process.exit(1);
 });
+
+if (!OFFLINE) await adoptCachedSession();
 
 server.listen(PORT, () => {
   console.log(
