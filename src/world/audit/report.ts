@@ -25,6 +25,7 @@ import {
 } from '../../config';
 import type { World } from '../index';
 import { getTiles } from '../tiles';
+import { isRevealAll, setRevealAll } from '../../render/sonarMaterial';
 import {
   clearEvents,
   getAllEvents,
@@ -375,6 +376,14 @@ export function initReport(world: World): () => void {
     // wherever the player happens to be when the report opens.
     const target = new THREE.Vector3(0, 0, 0);
 
+    // The game is drawn with a sonar mask that hides everything the player hasn't "heard", so without
+    // this the overview is black (only the player's arm's reach would show). Reveal the whole grid for
+    // this one render and hide the moving things (people, cars, the entity) so the map is clean.
+    const savedRevealAll = isRevealAll();
+    const entityBody = world.scene.getObjectByName('entity');
+    const savedAgentsVisible = world.agentsGroup.visible;
+    const savedEntityVisible = entityBody?.visible ?? true;
+
     const savedCamera = {
       position: camera.position.clone(),
       rotation: camera.rotation.clone(),
@@ -393,6 +402,9 @@ export function initReport(world: World): () => void {
     const corridorAcross = new THREE.Vector3(Math.cos(bearing), 0, Math.sin(bearing));
 
     try {
+      setRevealAll(true);
+      world.agentsGroup.visible = false;
+      if (entityBody) entityBody.visible = false;
       fitCanvasToRenderer();
 
       const aspect = sourceWidth / sourceHeight;
@@ -467,6 +479,9 @@ export function initReport(world: World): () => void {
       console.warn('[audit] Could not capture the world snapshot:', error);
       return false;
     } finally {
+      setRevealAll(savedRevealAll);
+      world.agentsGroup.visible = savedAgentsVisible;
+      if (entityBody) entityBody.visible = savedEntityVisible;
       // Restore the live player camera exactly as it was before the snapshot.
       camera.position.copy(savedCamera.position);
       camera.rotation.copy(savedCamera.rotation);

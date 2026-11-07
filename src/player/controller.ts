@@ -98,6 +98,8 @@ export interface PlayerController {
    */
   applyImpulse(impulse: THREE.Vector3, options?: ImpulseOptions): void;
   isStunned(): boolean;
+  /** Clear stun, velocity, held keys and the daze effect (used when a run restarts). */
+  reset(): void;
   /** Disable e.g. while the free-fly debug camera is active. */
   setEnabled(enabled: boolean): void;
   dispose(): void;
@@ -387,6 +389,12 @@ function resolveWalls(pos: THREE.Vector3): number {
       stunFromImpact(impulseOptions.impactSpeed ?? 0, impulseOptions.forceStun ?? false);
     },
     isStunned: () => stunTimer > 0,
+    reset() {
+      stunTimer = 0;
+      velocity.set(0, 0, 0);
+      keys.clear();
+      effect.reset();
+    },
     setEnabled(value: boolean) {
       enabled = value;
       if (!value) {

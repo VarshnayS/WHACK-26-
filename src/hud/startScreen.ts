@@ -22,6 +22,7 @@ import { getTileStats } from '../world/tiles';
 import { groundStatus, setGroundLoading } from '../world/heightField';
 import { initVision } from '../senses/vision';
 import { createVisionPicker } from '../senses/visionPicker';
+import { settings, setEntityEnabledSetting } from '../game/settings';
 
 /** Everything must stay ready this long before "Click to begin" lights up (ms): tiles can restart loading. */
 const READY_HOLD_MS = 400;
@@ -106,6 +107,20 @@ type Mode = 'start' | 'vision' | 'hidden';
 
 let overlay: HTMLDivElement | null = null;
 let mode: Mode = 'hidden';
+/** Called when the player clicks "Click to begin" on the main menu (src/game/flow.ts). */
+const beginListeners = new Set<() => void>();
+let reopen: (() => void) | null = null;
+
+/** Register a callback for "Click to begin" (first start and every start after Quit to Menu). */
+export function onMenuBegin(fn: () => void): () => void {
+  beginListeners.add(fn);
+  return () => beginListeners.delete(fn);
+}
+
+/** Show the main menu again (after Quit to Menu). Loading is already done, so Begin is enabled. */
+export function reopenMainMenu(): void {
+  reopen?.();
+}
 
 export function initStartScreen(hud: HTMLElement): void {
   if (overlay) return;
@@ -151,12 +166,24 @@ export function initStartScreen(hud: HTMLElement): void {
 
   const picker = createVisionPicker();
 
+  // Main menu option: the entity that hunts the player.
+  const settingsRow = document.createElement('label');
+  settingsRow.style.cssText = 'display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;';
+  const entityBox = document.createElement('input');
+  entityBox.type = 'checkbox';
+  entityBox.checked = settings.entityEnabled;
+  entityBox.style.cssText = 'width:18px;height:18px;cursor:pointer;accent-color:#fff;';
+  entityBox.addEventListener('change', () => setEntityEnabledSetting(entityBox.checked));
+  const entityText = document.createElement('span');
+  entityText.textContent = 'Enable Entity (Hard Mode)';
+  settingsRow.append(entityBox, entityText);
+
   const begin = document.createElement('button');
   begin.type = 'button';
   begin.style.cssText =
     'font:inherit;font-size:16px;padding:10px 28px;background:#000;color:#fff;border:1px solid #fff;border-radius:4px;';
 
-  el.append(title, sub, controls, barWrap, status, picker.el, begin);
+  el.append(title, sub, controls, barWrap, status, settingsRow, picker.el, begin);
   hud.appendChild(el);
   mode = 'start';
 
@@ -196,6 +223,7 @@ export function initStartScreen(hud: HTMLElement): void {
       report.begin = performance.now();
       setGroundLoading(false); // back to the in-game budget
       if (report.ready === null) finishReport(); // "begin anyway" path
+      for (const fn of beginListeners) fn();
     } else {
       startAudio(); // resume if the browser suspended it
     }
@@ -208,7 +236,7 @@ export function initStartScreen(hud: HTMLElement): void {
   });
   // a click anywhere on the screen (not on the picker) also begins / resumes
   el.addEventListener('click', (e) => {
-    if (picker.el.contains(e.target as Node)) return;
+    if (picker.el.contains(e.target as Node) || settingsRow.contains(e.target as Node)) return;
     onBegin();
   });
 
@@ -220,11 +248,27 @@ export function initStartScreen(hud: HTMLElement): void {
     barWrap.style.display = 'none';
     status.style.display = 'none';
     controls.style.display = 'none';
+    settingsRow.style.display = 'none';
     el.style.background = 'rgba(0,0,0,0.82)';
     setBegin(true, 'Resume');
     el.style.display = 'flex';
     getPlayerController()?.controls.unlock();
   }
+
+  reopen = () => {
+    mode = 'start';
+    title.textContent = 'Blind Simulator';
+    sub.textContent = 'University Road, Warwick. Headphones on.';
+    barWrap.style.display = 'none';
+    status.style.display = 'none';
+    controls.style.display = '';
+    settingsRow.style.display = 'flex';
+    entityBox.checked = settings.entityEnabled;
+    el.style.background = '#000';
+    el.style.display = 'flex';
+    setBegin(true, 'Click to begin');
+    getPlayerController()?.controls.unlock();
+  };
 
   window.addEventListener('keydown', (e) => {
     if (e.code !== 'KeyO' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
