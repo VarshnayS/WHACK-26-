@@ -1,4 +1,5 @@
 /**
+<<<<<<< HEAD
  * src/entity/config.ts: tuning for the entity that hunts the player
  * Owner: entity (src/entity/)
  *
@@ -58,3 +59,9 @@ export const ENTITY = {
   /** Body height (the mesh is built to this). */
   HEIGHT: 2.4,
 } as const;
+=======
+ * src/entity/config.ts: constants for this module only (one owner, so nobody shares a config file).
+ * Plain constants only.
+ */
+export {};
+>>>>>>> origin/main

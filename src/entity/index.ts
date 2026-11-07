@@ -1,5 +1,6 @@
 /**
  * src/entity/index.ts: the entity that hunts the player
+<<<<<<< HEAD
  * Owner: entity (src/entity/)
  *
  * Plugs in through the shared `world` object only:
@@ -177,3 +178,12 @@ export function getEntityAgitation(): number {
 export function getEntityObject(): THREE.Object3D | null {
   return body;
 }
+=======
+ // Stub entry point: does nothing yet. Called once from src/main.ts.
+ */
+import type { World } from '../world';
+
+export function initEntity(world: World): void {
+  void world; // TODO: set world.entity, emit 'entityState' and 'caught'
+}
+>>>>>>> origin/main

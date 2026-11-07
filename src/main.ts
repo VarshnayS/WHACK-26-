@@ -14,6 +14,10 @@ import { initController } from './player/controller';
 import { initHud } from './hud/hud';
 import { initMic } from './audio'; // C: initAudioSonar(world)
 import { updatePings } from './render/pings';
+import { initSoundSources } from './world/soundSources';
+import { initAudit } from './audit';
+import { initSenses } from './senses';
+import { initEntity } from './entity';
 
 function setupRenderer(): void {
   const { renderer, camera } = world;
@@ -38,6 +42,10 @@ async function start(): Promise<void> {
   await initEntity();
   initController(); // C
   void initMic(); // C (waits for a user gesture itself)
+  initSoundSources(world); // stub: sound sources (src/world/soundSources.ts)
+  initAudit(world); // stub: scoring / accessibility audit (src/audit/)
+  initSenses(world); // stub: vision and other senses (src/senses/)
+  initEntity(world); // stub: the entity (src/entity/)
 
   let last = performance.now();
   world.renderer.setAnimationLoop((now: number) => {
