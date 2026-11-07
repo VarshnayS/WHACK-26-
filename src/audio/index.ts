@@ -7,7 +7,7 @@
  * Keys:  SPACE  medium transient pulse (works without a mic)
  *        ⇧SPACE max-strength pulse
  *        ⇧C     recalibrate the noise floor (plain C holds the cane: src/senses/cane.ts)
- *        M      mute / unmute the mic
+ *        ⇧M     mute / unmute the mic (plain M is reserved for AUDIT's architect report)
  *        `      toggle the debug meter
  *        [ ]    sensitivity down / up      - =  trigger level down / up      0  reset (./tuning.ts)
  *        U      mute the soundscape        , .  volume down / up (./soundscape.ts)
@@ -62,7 +62,7 @@ const STATUS_HUD: Record<Status, { text: string; hideAfterMs?: number; warn?: bo
   requesting: { text: 'Allow microphone access to use your voice as sonar' },
   calibrating: { text: 'Stay quiet… calibrating mic' },
   listening: { text: 'Mic sonar ready: clap, click or shout', hideAfterMs: 2500 },
-  muted: { text: 'Mic muted (M to unmute).' + FALLBACK },
+  muted: { text: 'Mic muted (Shift+M to unmute).' + FALLBACK },
   denied: { text: 'Mic blocked: allow it in site settings and reload.' + FALLBACK, hideAfterMs: 8000, warn: true },
   'no-device': { text: 'No microphone found.' + FALLBACK, hideAfterMs: 8000, warn: true },
   unsupported: { text: 'Mic needs localhost or HTTPS.' + FALLBACK, hideAfterMs: 8000, warn: true },
@@ -247,7 +247,7 @@ class AudioSonar {
       return;
     }
     if (this.mic.isMuted) {
-      this.hud.show('Unmute (M) before calibrating', 2000);
+      this.hud.show('Unmute (Shift+M) before calibrating', 2000);
       return;
     }
     this.detector.reset();
@@ -313,7 +313,7 @@ class AudioSonar {
         if (e.shiftKey) this.beginCalibration(); // plain C = cane (src/senses/cane.ts)
         break;
       case 'KeyM':
-        this.toggleMute();
+        if (e.shiftKey) this.toggleMute(); // plain M = AUDIT's architect report
         break;
       default: {
         const msg = handleTuningKey(e.code, this.cfg);

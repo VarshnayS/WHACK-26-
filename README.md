@@ -82,7 +82,8 @@ Check the proxy works by opening http://localhost:8787/v1/3dtiles/root.json. You
 | O | Vision picker (blindness scale); O again or Resume to go back |
 | U | Mute / unmute the soundscape |
 | , / . | Sound volume down / up (saved per browser) |
-| M | Mute / unmute the mic (note: M is earmarked for AUDIT's report; the mic mute moves when that lands) |
+| M | Architect report (coming from AUDIT) |
+| Shift+M | Mute / unmute the mic |
 | Shift+C | Recalibrate the mic noise floor |
 | [ / ] | Mic sensitivity down / up (pulse size; saved per browser) |
 | - / = | Mic trigger level down / up (dB above room noise; saved per browser) |
