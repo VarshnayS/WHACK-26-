@@ -10,7 +10,7 @@
  * tested before SOUND's pings land. Never in production builds.
  */
 import type * as THREE from 'three';
-import { MAX_PINGS, type ActivePing } from '../shared/contracts';
+import { MAX_PINGS, type ActivePing, type VisionMode } from '../shared/contracts';
 import { world } from '../world';
 import { sonarUniforms } from './sonarMaterial';
 import { getDevPings, initDevPings } from './devPings';
@@ -46,12 +46,26 @@ function writeAll(list: readonly ActivePing[], n: number, t: number): number {
   return n;
 }
 
-/** Called once per frame by src/main.ts: time, player position and active pings -> uniforms. */
+const DEG = Math.PI / 180;
+
+/** world.vision (+ render-side acuity) and the gaze -> vision uniforms. */
+function updateVision(): void {
+  const u = sonarUniforms;
+  const v = world.vision as VisionMode & { acuity?: number };
+  u.uVisDist.value = Math.max(0, v.visibleDistance);
+  u.uVisOuter.value = Math.max(0, Math.min(v.peripheralLimitDeg, v.fovDeg / 2)) * DEG;
+  u.uVisInner.value = Math.max(0, v.centralLossDeg / 2) * DEG;
+  u.uVisAcuity.value = Math.min(1, Math.max(0, v.acuity ?? 1));
+  world.camera.getWorldDirection(u.uViewDir.value);
+}
+
+/** Called once per frame by src/main.ts: time, player position, vision and active pings -> uniforms. */
 export function updatePings(playerPos: THREE.Vector3): void {
   const t = now();
   const u = sonarUniforms;
   u.uTime.value = t;
   u.uPlayerPos.value.copy(playerPos);
+  updateVision();
 
   let n = writeAll(world.activePings(), 0, t);
   if (import.meta.env.DEV) {

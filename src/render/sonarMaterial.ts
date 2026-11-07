@@ -9,6 +9,9 @@
  *   - pings: each active ping (src/render/pings.ts fills the uniforms from world.activePings())
  *     draws an expanding ring with a fading trail behind it, clipped to its range. The ring's look
  *     comes from the ping's style (speed, thickness, brightness, fade);
+ *   - vision (world.vision, src/senses/vision.ts): surfaces within visibleDistance inside the gaze
+ *     cone (minus a central blind spot) are always visible; low acuity keeps only the coarse grid
+ *     beyond visibleDistance * acuity. Total blindness (the default) shows nothing;
  *   - reveal all (R, setRevealAll): the full grid everywhere, no mask.
  *
  * Grid: lines are drawn only along the axes tangent to the surface (an axis whose grid planes are
@@ -55,6 +58,16 @@ export type SonarUniforms = {
   uPingC: THREE.IUniform<THREE.Vector4[]>;
   /** 1 = debug "reveal everything" (R key): full grid, no sonar mask. */
   uRevealAll: THREE.IUniform<number>;
+  /** Vision: always-visible distance (m), 0 = blind. */
+  uVisDist: THREE.IUniform<number>;
+  /** Vision: half-angle of the visible cone around the gaze (radians). */
+  uVisOuter: THREE.IUniform<number>;
+  /** Vision: half-angle of the central blind spot (radians), 0 = none. */
+  uVisInner: THREE.IUniform<number>;
+  /** Vision: sharpness 0..1. */
+  uVisAcuity: THREE.IUniform<number>;
+  /** Camera forward (world space, unit). */
+  uViewDir: THREE.IUniform<THREE.Vector3>;
 };
 
 export const sonarUniforms: SonarUniforms = {
@@ -68,6 +81,11 @@ export const sonarUniforms: SonarUniforms = {
   uPingB: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector4()) },
   uPingC: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector4()) },
   uRevealAll: { value: 0 },
+  uVisDist: { value: 0 },
+  uVisOuter: { value: 0 },
+  uVisInner: { value: 0 },
+  uVisAcuity: { value: 0 },
+  uViewDir: { value: new THREE.Vector3(0, 0, -1) },
 };
 
 const vertexShader = /* glsl */ `
@@ -101,6 +119,11 @@ const fragmentShader = /* glsl */ `
   uniform vec4 uPingB[MAX_PINGS];
   uniform vec4 uPingC[MAX_PINGS];
   uniform float uRevealAll;
+  uniform float uVisDist;
+  uniform float uVisOuter;
+  uniform float uVisInner;
+  uniform float uVisAcuity;
+  uniform vec3 uViewDir;
   varying vec3 vWorldPos;
   varying vec3 vGridPos;
 
@@ -121,7 +144,26 @@ const fragmentShader = /* glsl */ `
     // flat face normal from screen-space derivatives (no normal attribute needed)
     vec3 n = normalize(cross(dFdx(vGridPos), dFdy(vGridPos)));
     vec3 gp = vGridPos / uGridSize;
-    float grid = max(sonarGrid(gp, n), sonarGrid(gp * (1.0 / GRID_COARSE), n) * GRID_COARSE_LEVEL);
+    float gFine = sonarGrid(gp, n);
+    float gCoarse = sonarGrid(gp * (1.0 / GRID_COARSE), n) * GRID_COARSE_LEVEL;
+    float grid = max(gFine, gCoarse);
+
+    // vision: always-visible surfaces inside the gaze cone, minus the central blind spot
+    float visionLum = 0.0;
+    if (uVisDist > 0.0) {
+      vec3 toP = vWorldPos - cameraPosition;
+      float dist = length(toP);
+      float ang = acos(clamp(dot(toP / max(dist, 1e-4), uViewDir), -1.0, 1.0));
+      float soft = 0.035; // ~2 degrees
+      float inCone = 1.0 - smoothstep(uVisOuter - soft, uVisOuter + soft, ang);
+      float outSpot = uVisInner > 0.0 ? smoothstep(uVisInner - soft, uVisInner + soft, ang) : 1.0;
+      float near = 1.0 - smoothstep(uVisDist * 0.55, uVisDist, dist);
+      // low acuity = blur: fine lines only close up, then just the coarse grid
+      float fineReach = uVisDist * uVisAcuity;
+      float fineW = 1.0 - smoothstep(fineReach * 0.6, fineReach + 0.01, dist);
+      float g = max(gFine * fineW, gCoarse);
+      visionLum = g * inCone * outSpot * near * (0.15 + 0.6 * uVisAcuity);
+    }
 
     float reveal = uRevealAll;
 
@@ -157,8 +199,9 @@ const fragmentShader = /* glsl */ `
     }
 
     tintAmt = min(tintAmt, 1.0);
-    vec3 col = mix(vec3(min(reveal, 1.0)), tint, tintAmt);
-    gl_FragColor = vec4(grid * col, 1.0);
+    float white = max(grid * min(reveal, 1.0), visionLum);
+    vec3 col = mix(vec3(white), grid * tint, tintAmt);
+    gl_FragColor = vec4(col, 1.0);
   }
 `;
 
