@@ -428,12 +428,12 @@ export function initReport(world: World): () => void {
 
       // Required synchronous WebGL render, followed immediately by a 2D canvas copy.
       world.renderer.render(world.scene, camera);
-      context.drawImage(source, 0, 0, sourceWidth, sourceHeight);
+      context!.drawImage(source, 0, 0, sourceWidth, sourceHeight);
 
       // Copy the just-captured WebGL frame to the persistent cache before any heat is drawn.
       snapshotCanvas.width = sourceWidth;
       snapshotCanvas.height = sourceHeight;
-      snapshotContext.drawImage(canvas, 0, 0, sourceWidth, sourceHeight);
+      snapshotContext!.drawImage(canvas, 0, 0, sourceWidth, sourceHeight);
 
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
       const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
