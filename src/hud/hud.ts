@@ -8,6 +8,7 @@
  */
 
 import { initStunVignette } from './stunVignette';
+import { initCaneIndicator } from './caneIndicator';
 
 let tileAttributionEl: HTMLElement | null = null;
 
@@ -17,6 +18,7 @@ export function initHud(): void {
   if (!root) return;
 
   initStunVignette(root);
+  initCaneIndicator(root);
 
   const attribution = document.createElement('div');
   attribution.style.cssText = 'position:absolute;right:8px;bottom:8px;text-align:right;';

@@ -53,6 +53,24 @@ const raycaster = new THREE.Raycaster();
 
 let initialised = false;
 
+/** Live cane state for the HUD indicator (src/hud/caneIndicator.ts). Read-only outside this file. */
+export interface CaneState {
+  held: boolean;
+  /** Sweep angle in radians, + = to the player's left, within ±halfArc. */
+  angle: number;
+  /** Half the sweep arc in radians. */
+  halfArc: number;
+  /** True while the cane is against something. */
+  touching: boolean;
+  /** performance.now() / 1000 of the last tap (contact or hard tap). */
+  lastTap: number;
+}
+const state: CaneState = { held: false, angle: 0, halfArc: 0, touching: false, lastTap: -Infinity };
+
+export function getCaneState(): Readonly<CaneState> {
+  return state;
+}
+
 function isTyping(e: KeyboardEvent): boolean {
   const el = e.target as HTMLElement | null;
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
@@ -149,6 +167,7 @@ export function initCane(world: World): void {
 
   function tap(range: number): void {
     world.ping(tip, range, 'cane');
+    state.lastTap = now();
   }
 
   function contact(): void {
@@ -170,8 +189,11 @@ export function initCane(world: World): void {
   world.onUpdate((dt) => {
     const isHeld = held();
     line.visible = isHeld;
+    state.held = isHeld;
+    state.halfArc = HALF_ARC;
     if (!isHeld) {
       wasHeld = false;
+      state.touching = false;
       return;
     }
 
@@ -238,6 +260,8 @@ export function initCane(world: World): void {
     if (touching && (!inContact || t - lastTap >= CANE_CONTACT_REPEAT)) contact();
     inContact = touching;
     wasHeld = true;
+    state.angle = angle;
+    state.touching = touching;
 
     positions[0] = hand.x;
     positions[1] = hand.y;
