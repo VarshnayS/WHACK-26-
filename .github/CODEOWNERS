@@ -18,3 +18,4 @@
 # Shared contracts: everyone
 /README.md           @USERNAME_A @USERNAME_B @USERNAME_C
 /src/world/index.ts  @USERNAME_A @USERNAME_B @USERNAME_C
+/src/shared/        @USERNAME_A @USERNAME_B @USERNAME_C
