@@ -26,6 +26,11 @@ export const IDLE_PULSE_RANGE = 1.5;
 
 // --- cane (src/senses/cane.ts) -------------------------------------------------------------------
 
+/**
+ * true = the cane is out and sweeping on its own from the start; C toggles it away / back out.
+ * false = old behaviour: hold C (or right mouse) to sweep. Right mouse always holds it out.
+ */
+export const CANE_AUTO_SWEEP = true;
 /** Horizontal reach of the cane tip in front of the feet (m). */
 export const CANE_REACH = 1.2;
 /** Full sweep arc (degrees), centred on where the player faces. */
@@ -40,9 +45,15 @@ export const CANE_HAND_FORWARD = 0.2;
 export const CANE_SWEEP_RAY_HEIGHT = 0.12;
 /** Surfaces with a normal steeper than this (|n.y| < it) are obstacles; flatter ones are floor. */
 export const CANE_MAX_OBSTACLE_NORMAL_Y = 0.7;
-/** Ping range (m) of a contact tap / a hard tap (V). */
-export const CANE_TAP_RANGE = 1.0;
-export const CANE_HARD_TAP_RANGE = 2.5;
+/**
+ * Sweep sonar: while the cane is held, its tip sends a silent ping every CANE_SWEEP_PING_DEG of
+ * sweep, so the sweep paints a band of the street around you (100°/s ÷ 15° ≈ 7 pings/s).
+ */
+export const CANE_SWEEP_PING_RANGE = 4.5;
+export const CANE_SWEEP_PING_DEG = 15;
+/** Ping range (m) of a contact tap / a hard tap (V). These also play the tap sound. */
+export const CANE_TAP_RANGE = 4.5;
+export const CANE_HARD_TAP_RANGE = 6;
 /** Minimum time between two contact taps (s), so resting on a wall doesn't machine-gun pings. */
 export const CANE_TAP_COOLDOWN = 0.18;
 /** While the cane stays against something, it taps again this often (s). */

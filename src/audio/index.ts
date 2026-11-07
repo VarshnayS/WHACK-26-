@@ -6,7 +6,7 @@
  *
  * Keys:  SPACE  medium transient pulse (works without a mic)
  *        ⇧SPACE max-strength pulse
- *        ⇧C     recalibrate the noise floor (plain C holds the cane: src/senses/cane.ts)
+ *        ⇧C     recalibrate the noise floor (plain C toggles the cane: src/senses/cane.ts)
  *        ⇧M     mute / unmute the mic (plain M is reserved for AUDIT's architect report)
  *        `      toggle the debug meter
  *        [ ]    sensitivity down / up      - =  trigger level down / up      0  reset (./tuning.ts)

@@ -2,15 +2,21 @@
  * src/senses/cane.ts: the white cane
  * Owner: SENSES
  *
- * Hold right mouse or C to sweep the cane left/right in front of the player (~1.2 m reach, ~60° arc).
+ * The cane sweeps left/right in front of the player (~1.2 m reach, ~60° arc). With CANE_AUTO_SWEEP
+ * (default) it's out and sweeping on its own; C puts it away / takes it out again. Otherwise hold C.
+ * Holding right mouse always keeps it out.
  * It's drawn as a thin white line that is always visible (not masked by the sonar) while held.
+ *
+ * SWEEP SONAR: while held, the tip sends a silent world.ping(tip, CANE_SWEEP_PING_RANGE, 'cane')
+ * every CANE_SWEEP_PING_DEG of sweep, so sweeping paints the street ~4–5 m around the player.
  *
  * Every frame two short rays are cast against world.tilesGroup: one along the shaft (hand to tip)
  * and one swept from the previous tip to the new one, just above the ground. A steep surface
  * (wall, curb face, bollard) is a contact: the tip stops there and bounces back, and the cane fires
  * world.ping(tip, CANE_TAP_RANGE, 'cane') plus world.audit.record({ kind: 'detected', caneActive: true }).
- * The soundscape (src/audio/soundscape.ts) plays the tap for every 'cane' ping, louder for bigger
- * ranges. V while holding = a hard tap: world.ping(tip, CANE_HARD_TAP_RANGE, 'cane').
+ * V while holding = a hard tap: world.ping(tip, CANE_HARD_TAP_RANGE, 'cane'). Taps bump
+ * CaneState.tapSerial; the soundscape (src/audio/soundscape.ts) plays the tap sound only for those,
+ * so the sweep pings stay silent.
  * Flat hits along the shaft (the floor) just rest the tip on the ground.
  * Tuning: src/senses/config.ts.
  */
@@ -19,6 +25,7 @@ import type { World } from '../world';
 import { EYE_HEIGHT } from '../config';
 import {
   CANE_ARC_DEG,
+  CANE_AUTO_SWEEP,
   CANE_BOUNCE_LOCK,
   CANE_CONTACT_REPEAT,
   CANE_HAND_DOWN,
@@ -30,6 +37,8 @@ import {
   CANE_MAX_OBSTACLE_NORMAL_Y,
   CANE_REACH,
   CANE_SWEEP_DEG_PER_S,
+  CANE_SWEEP_PING_DEG,
+  CANE_SWEEP_PING_RANGE,
   CANE_SWEEP_RAY_HEIGHT,
   CANE_TAP_COOLDOWN,
   CANE_TAP_RANGE,
@@ -53,7 +62,7 @@ const raycaster = new THREE.Raycaster();
 
 let initialised = false;
 
-/** Live cane state for the HUD indicator (src/hud/caneIndicator.ts). Read-only outside this file. */
+/** Live cane state (the soundscape reads tapSerial). Read-only outside this file. */
 export interface CaneState {
   held: boolean;
   /** Sweep angle in radians, + = to the player's left, within ±halfArc. */
@@ -64,8 +73,20 @@ export interface CaneState {
   touching: boolean;
   /** performance.now() / 1000 of the last tap (contact or hard tap). */
   lastTap: number;
+  /** Bumped on every tap (not on sweep pings), so listeners can tell a tap from a sweep ping. */
+  tapSerial: number;
+  /** Whether the latest tap was a hard tap (V). */
+  lastTapHard: boolean;
 }
-const state: CaneState = { held: false, angle: 0, halfArc: 0, touching: false, lastTap: -Infinity };
+const state: CaneState = {
+  held: false,
+  angle: 0,
+  halfArc: 0,
+  touching: false,
+  lastTap: -Infinity,
+  tapSerial: 0,
+  lastTapHard: false,
+};
 
 export function getCaneState(): Readonly<CaneState> {
   return state;
@@ -114,6 +135,7 @@ export function initCane(world: World): void {
 
   let mouseHeld = false;
   let keyHeld = false;
+  let autoOn = CANE_AUTO_SWEEP; // auto-sweep mode: C toggles this instead of being held
   let angle = 0; // radians, + = to the player's left
   let sweepDir = 1;
   let lastTap = -Infinity;
@@ -121,6 +143,7 @@ export function initCane(world: World): void {
   let wasHeld = false;
   let inContact = false;
   let lastBounce = -Infinity;
+  let sweepTravel = 0; // degrees swept since the last sweep ping
 
   // --- the line (white, always visible while held) ---
   const positions = new Float32Array(6);
@@ -140,7 +163,7 @@ export function initCane(world: World): void {
   world.scene.add(line);
 
   // --- input ---
-  const held = () => mouseHeld || keyHeld;
+  const held = () => autoOn || mouseHeld || keyHeld;
   window.addEventListener('mousedown', (e) => {
     if (e.button === 2) mouseHeld = true;
   });
@@ -150,7 +173,11 @@ export function initCane(world: World): void {
   window.addEventListener('contextmenu', (e) => e.preventDefault());
   window.addEventListener('keydown', (e) => {
     if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.code === 'KeyC' && !e.shiftKey) keyHeld = true; // Shift+C = mic recalibration
+    if (e.code === 'KeyC' && !e.shiftKey) {
+      // Shift+C = mic recalibration
+      if (!CANE_AUTO_SWEEP) keyHeld = true;
+      else if (!e.repeat) autoOn = !autoOn;
+    }
     if (e.code === 'KeyV' && !e.repeat && held()) hardTap();
   });
   window.addEventListener('keyup', (e) => {
@@ -165,16 +192,19 @@ export function initCane(world: World): void {
     return performance.now() / 1000;
   }
 
-  function tap(range: number): void {
-    world.ping(tip, range, 'cane');
+  function tap(range: number, hard: boolean): void {
+    // state first: the soundscape reads tapSerial when it sees the ping
     state.lastTap = now();
+    state.lastTapHard = hard;
+    state.tapSerial++;
+    world.ping(tip, range, 'cane');
   }
 
   function contact(): void {
     const t = now();
     if (t - lastTap < CANE_TAP_COOLDOWN) return;
     lastTap = t;
-    tap(CANE_TAP_RANGE);
+    tap(CANE_TAP_RANGE, false);
     world.audit.record({ kind: 'detected', caneActive: true, position: tip.clone() });
   }
 
@@ -183,7 +213,7 @@ export function initCane(world: World): void {
     if (t - lastHardTap < CANE_HARD_TAP_COOLDOWN) return;
     lastHardTap = t;
     lastTap = t; // the hard tap covers any contact this frame
-    tap(CANE_HARD_TAP_RANGE);
+    tap(CANE_HARD_TAP_RANGE, true);
   }
 
   world.onUpdate((dt) => {
@@ -203,6 +233,7 @@ export function initCane(world: World): void {
     right.set(-forward.z, 0, forward.x);
 
     // sweep: constant speed, bouncing at the ends of the arc
+    const prevAngle = angle;
     angle += sweepDir * SWEEP_SPEED * Math.min(dt, 0.05);
     if (angle > HALF_ARC) {
       angle = HALF_ARC;
@@ -259,6 +290,13 @@ export function initCane(world: World): void {
     const touching = obstacleAhead || sideHit;
     if (touching && (!inContact || t - lastTap >= CANE_CONTACT_REPEAT)) contact();
     inContact = touching;
+
+    // sweep sonar: a silent ping from the tip every CANE_SWEEP_PING_DEG of sweep (one on pick-up)
+    sweepTravel += Math.abs(angle - prevAngle) / DEG;
+    if (!wasHeld || sweepTravel >= CANE_SWEEP_PING_DEG) {
+      sweepTravel = wasHeld ? sweepTravel % CANE_SWEEP_PING_DEG : 0;
+      world.ping(tip, CANE_SWEEP_PING_RANGE, 'cane');
+    }
     wasHeld = true;
     state.angle = angle;
     state.touching = touching;

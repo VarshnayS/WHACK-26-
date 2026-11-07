@@ -8,7 +8,6 @@
  */
 
 import { initStunVignette } from './stunVignette';
-import { initCaneIndicator } from './caneIndicator';
 import { initStartScreen } from './startScreen';
 import { world } from '../world';
 
@@ -20,7 +19,6 @@ export function initHud(): void {
   if (!root) return;
 
   initStunVignette(root);
-  initCaneIndicator(root);
   initStartScreen(root);
   initVisionLabel(root);
 
