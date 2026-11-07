@@ -801,6 +801,17 @@ class Soundscape {
     }
   };
 
+  /** Debug snapshot (also handy from the console). */
+  stats(): { running: boolean; cars: number; conversations: number; volume: number; muted: boolean } {
+    return {
+      running: this.ctx?.state === 'running',
+      cars: this.cars.filter((v) => v.agent).length,
+      conversations: this.murmurs.filter((m) => m.members.length > 0).length,
+      volume: this.volume,
+      muted: this.muted,
+    };
+  }
+
   private applyVolume(): void {
     const ctx = this.ctx;
     if (!ctx) return;
@@ -832,6 +843,11 @@ export function initSoundscape(world: World): void {
   if (instance) return;
   instance = new Soundscape(world);
   instance.install();
+}
+
+/** Debug: how many voices are live right now, or null before init. */
+export function getSoundscapeStats(): ReturnType<Soundscape['stats']> | null {
+  return instance?.stats() ?? null;
 }
 
 export function disposeSoundscape(): void {
