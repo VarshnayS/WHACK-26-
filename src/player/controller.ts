@@ -14,9 +14,12 @@ import {
   groundHeight,
   initCollisionTestGeometry,
   setCollisionTargets,
+  logCollisionHit,
+  type CollisionHit,
 } from './collision';
 import { createStunEffect } from './stunEffect';
 import { clampToPlayArea, isInsidePlayArea } from '../world/playArea';
+
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -132,6 +135,7 @@ const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const UP = new THREE.Vector3(0, 1, 0);
 
 let current: PlayerController | null = null;
+let lastLoggedWallObject: THREE.Object3D | null = null;
 
 /** The live controller, or null before initController() has run (agents look it up each frame). */
 export function getPlayerController(): PlayerController | null {
@@ -165,38 +169,60 @@ export function initController(options: ControllerOptions = {}): PlayerControlle
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
 
-  /**
-   * Check for walls in the direction of travel and slide along them (two passes so
-   * corners work). Returns the speed that was heading INTO a wall; the wall normal
-   * of the strongest hit is left in `lastNormal`.
-   */
-  function resolveWalls(pos: THREE.Vector3): number {
-    let impactSpeed = 0;
-    for (let pass = 0; pass < 2; pass++) {
-      const speed = velocity.length();
-      if (speed < 1e-3) break;
-      dirTmp.copy(velocity).divideScalar(speed);
+/**
+ * Check for walls in the direction of travel and slide along them.
+ * Returns the strongest impact speed and logs each newly encountered wall.
+ */
+function resolveWalls(pos: THREE.Vector3): number {
+  let impactSpeed = 0;
+  let strongestHit: CollisionHit | null = null;
 
-      const hit = checkCollision(pos, dirTmp);
-      if (!hit.blocked) break;
+  for (let pass = 0; pass < 2; pass++) {
+    const speed = velocity.length();
+    if (speed < 1e-3) break;
 
-      // Remove only the component pushing into the wall -> slide along it.
-      const into = -velocity.dot(hit.normal);
-      if (into > 0) {
-        if (into > impactSpeed) {
-          impactSpeed = into;
-          lastNormal.copy(hit.normal);
-          lastPoint.copy(hit.point);
-        }
-        velocity.addScaledVector(hit.normal, into);
+    dirTmp.copy(velocity).divideScalar(speed);
+
+    const hit = checkCollision(pos, dirTmp);
+    if (!hit.blocked) break;
+
+    // Remove only the component pushing into the wall -> slide along it.
+    const into = -velocity.dot(hit.normal);
+
+    if (into > 0) {
+      if (into > impactSpeed) {
+        impactSpeed = into;
+        lastNormal.copy(hit.normal);
+        
+        // Combine the properties we need from both branches
+        lastPoint.copy(hit.point); // Needed from main
+        strongestHit = hit;        // Needed from HEAD for the audit logger
       }
-      // If we've ended up too close, ease back out of the wall.
-      if (hit.distance < WALL_PUSH_OUT_DISTANCE) {
-        pos.addScaledVector(hit.normal, WALL_PUSH_OUT_DISTANCE - hit.distance);
-      }
+      
+      // Stop the velocity into the wall (Execute ONLY once)
+      velocity.addScaledVector(hit.normal, into);
     }
-    return impactSpeed;
+
+    // Ease back out if we've ended up too close (Execute ONLY once)
+    if (hit.distance < WALL_PUSH_OUT_DISTANCE) {
+      pos.addScaledVector(
+        hit.normal,
+        WALL_PUSH_OUT_DISTANCE - hit.distance,
+      );
+    }
   }
+
+  // Log once when entering contact with a new wall.
+  const contactObject = strongestHit?.object ?? null;
+
+  if (strongestHit && contactObject !== lastLoggedWallObject) {
+    logCollisionHit(strongestHit, impactSpeed, pos);
+  }
+
+  lastLoggedWallObject = contactObject;
+
+  return impactSpeed;
+}
 
   /** Keep the player inside the corridor walls and drop the velocity pushing out through them. */
   function keepInsidePlayArea(pos: THREE.Vector3): void {
