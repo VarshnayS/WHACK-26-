@@ -20,6 +20,17 @@ export const CHASE_BOOST_SPEED = 3.5;
 export const BOOST_TIME = 5;
 /** OMNISCIENT: how often it re-plans the shortest route to the player. */
 export const REPLAN_INTERVAL = 0.5;
+/** OMNISCIENT: wait (standing still) until the player first moves this far or makes a sound, so it
+ * doesn't hunt while the start screen is open. */
+export const ENGAGE_ON_PLAYER = true;
+export const ENGAGE_MOVE = 0.5;
+/** Sounds that count as the player starting. Not 'footstep': SENSES fires idle footstep pings even
+ * while the player stands on the start screen. */
+export const ENGAGE_SOUND_TYPES: readonly PingType[] = ['voice', 'impact', 'cane'];
+/** OMNISCIENT: within DIRECT_RADIUS it aims where the player will be, leading by up to this many seconds. */
+export const LEAD_MAX_TIME = 1.2;
+/** Player velocity smoothing (higher = reacts faster to direction changes). */
+export const PLAYER_VEL_SMOOTHING = 6;
 
 /** Speed while wandering the footway graph. */
 export const PATROL_SPEED = 1.0;

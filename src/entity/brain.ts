@@ -75,7 +75,14 @@ export class EntityBrain {
   speed = 0;
   /** Seconds since it started hunting (drives the speed ramp in OMNISCIENT mode). */
   huntTime = 0;
+  /** OMNISCIENT: false until the player first moves or makes a sound (see ENGAGE_ON_PLAYER). */
+  engaged = !C.ENGAGE_ON_PLAYER;
+  /** Smoothed player velocity (m/s), used to lead the player. */
+  readonly playerVelocity = new THREE.Vector3();
   private replanIn = 0;
+  private goalNode = -1;
+  private engageFrom: THREE.Vector3 | null = null;
+  private lastPlayerPos: THREE.Vector3 | null = null;
 
   private waypoints: THREE.Vector3[] = [];
   private searchTime = 0;
@@ -122,6 +129,11 @@ export class EntityBrain {
     this.catchCooldown = 0;
     this.huntTime = 0;
     this.replanIn = 0;
+    this.goalNode = -1;
+    this.engaged = !C.ENGAGE_ON_PLAYER;
+    this.engageFrom = null;
+    this.lastPlayerPos = null;
+    this.playerVelocity.set(0, 0, 0);
     this.waypoints = [];
     this.target = null;
     this.setState('patrol');
@@ -137,6 +149,8 @@ export class EntityBrain {
    */
   hear(sound: Sound): boolean {
     if (this.state === 'caught') return false;
+    // Any player sound means the game is on: lock on even if it's out of earshot.
+    if (C.OMNISCIENT && C.ENGAGE_SOUND_TYPES.includes(sound.type)) this.engaged = true;
     const d = distXZ(this.position, sound.position);
     if (d >= hearingDistance(sound.type, sound.range)) return false;
 
@@ -178,6 +192,7 @@ export class EntityBrain {
     this.timeSinceSound += dt;
     this.catchCooldown = Math.max(0, this.catchCooldown - dt);
 
+    this.trackPlayer(dt, playerPos);
     if (C.OMNISCIENT) this.pursue(dt, playerPos);
     else switch (this.state) {
       case 'patrol':
@@ -218,22 +233,75 @@ export class EntityBrain {
 
   // ---------------------------------------------------------------------------------------------
 
-  /** OMNISCIENT mode: shortest route to the player, re-planned every REPLAN_INTERVAL. */
+  /** Smoothed player velocity from frame-to-frame movement (teleports ignored). */
+  private trackPlayer(dt: number, playerPos: THREE.Vector3): void {
+    if (this.lastPlayerPos && dt > 0) {
+      const vx = (playerPos.x - this.lastPlayerPos.x) / dt;
+      const vz = (playerPos.z - this.lastPlayerPos.z) / dt;
+      if (Math.hypot(vx, vz) < 15) {
+        const k = Math.min(1, C.PLAYER_VEL_SMOOTHING * dt);
+        this.playerVelocity.x += (vx - this.playerVelocity.x) * k;
+        this.playerVelocity.z += (vz - this.playerVelocity.z) * k;
+      } else {
+        this.playerVelocity.set(0, 0, 0);
+      }
+    }
+    this.lastPlayerPos = (this.lastPlayerPos ?? new THREE.Vector3()).copy(playerPos);
+  }
+
+  /**
+   * OMNISCIENT mode: lock on to the player and take the shortest route.
+   *  - waits until the player first moves or makes a sound (ENGAGE_ON_PLAYER)
+   *  - far away: A* along the footway graph, re-planned every REPLAN_INTERVAL or as soon as the
+   *    player's nearest graph node changes
+   *  - within DIRECT_RADIUS: straight at where the player will be (leads by up to LEAD_MAX_TIME)
+   */
   private pursue(dt: number, playerPos: THREE.Vector3): void {
+    if (!this.engaged) {
+      this.engageFrom ??= playerPos.clone();
+      if (distXZ(playerPos, this.engageFrom) < C.ENGAGE_MOVE) {
+        this.waypoints = [];
+        this.target = null;
+        return;
+      }
+      this.engaged = true;
+    }
     this.huntTime += dt;
     const want: EntityStateName = this.timeSinceSound < C.BOOST_TIME ? 'chase' : 'investigate';
     if (this.state !== want) this.setState(want);
 
-    const goal = this.env.clamp(playerPos.clone(), C.WALL_INSET);
-    this.replanIn -= dt;
-    if (this.replanIn <= 0 || this.waypoints.length === 0) {
-      this.replanIn = C.REPLAN_INTERVAL;
+    const player = this.env.clamp(playerPos.clone(), C.WALL_INSET);
+    const d = distXZ(this.position, player);
+    const graph = this.env.graph();
+    const direct = !graph || graph.positions.length === 0 || d < C.DIRECT_RADIUS;
+
+    if (direct) {
+      // Intercept: aim where the player will be when it gets there.
+      const goal = player.clone();
+      const pv = this.playerVelocity;
+      if (Math.hypot(pv.x, pv.z) > 0.2) {
+        const t = Math.min(C.LEAD_MAX_TIME, d / Math.max(this.currentSpeed(), 0.5));
+        goal.x += pv.x * t;
+        goal.z += pv.z * t;
+        goal.copy(this.env.clamp(goal, C.WALL_INSET));
+      }
       this.target = goal;
-      this.waypoints = this.plan(goal);
+      this.waypoints = [goal.clone()];
+      this.goalNode = -1;
+      return;
+    }
+
+    const node = nearestNode(graph!, player);
+    this.replanIn -= dt;
+    if (this.replanIn <= 0 || this.waypoints.length === 0 || node !== this.goalNode) {
+      this.replanIn = C.REPLAN_INTERVAL;
+      this.goalNode = node;
+      this.target = player;
+      this.waypoints = this.plan(player);
     } else {
       // Between re-plans keep the last waypoint on the player.
-      this.target = goal;
-      this.waypoints[this.waypoints.length - 1].copy(goal);
+      this.target = player;
+      this.waypoints[this.waypoints.length - 1].copy(player);
     }
   }
 
@@ -300,6 +368,9 @@ export class EntityBrain {
     const points = path.map((i) => graph.positions[i].clone());
     // Skip the first node if it's behind us.
     if (points.length >= 2 && distXZ(this.position, points[1]) < distXZ(points[0], points[1])) points.shift();
+    // Drop the last node if the target is already between it and the node before (no overshoot).
+    const n = points.length;
+    if (n >= 2 && distXZ(points[n - 2], target) < distXZ(points[n - 2], points[n - 1])) points.pop();
     points.push(target.clone());
     return points;
   }
@@ -324,6 +395,17 @@ export class EntityBrain {
       const dx = wp.x - this.position.x;
       const dz = wp.z - this.position.z;
       const d = Math.hypot(dx, dz);
+      // Locked on: the final waypoint is the player, so close the whole distance instead of "arriving".
+      const homing = C.OMNISCIENT && this.engaged && this.waypoints.length === 1;
+      if (homing) {
+        if (d < 1e-4) break;
+        const step = Math.min(budget, d);
+        this.position.x += (dx / d) * step;
+        this.position.z += (dz / d) * step;
+        this.heading = Math.atan2(dx, dz);
+        budget -= step;
+        break;
+      }
       if (d <= C.WAYPOINT_REACHED) {
         this.waypoints.shift();
         continue;
