@@ -69,7 +69,7 @@ export function initEntityAudio(brain: EntityBrain, body: THREE.Object3D, camera
 
   const toBuffer = (samples: Float32Array): AudioBuffer => {
     const buf = ctx.createBuffer(1, samples.length, ctx.sampleRate);
-    buf.copyToChannel(samples as Float32Array<ArrayBuffer>, 0);
+    buf.getChannelData(0).set(samples);
     return buf;
   };
   const sr = ctx.sampleRate;
