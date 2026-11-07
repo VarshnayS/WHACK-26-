@@ -177,7 +177,7 @@ world.onUpdate((dt) => { /* runs every frame */ });
 |---|---|
 | **Sonar look** | Tune `src/render/sonarMaterial.ts` (wave speed, ring width, fade, grid density). Don't add per-object materials. |
 | **Mic** | `src/audio/mic.ts`: Web Audio `getUserMedia` + `AnalyserNode`. Calibrate ambient noise on start; above baseline + ~15 dB, call `world.ping(playerPos, rangeFromDb)`. Mic needs `localhost` or HTTPS. |
-| **Collision** | Fill in `checkCollision(pos, dir)` and `groundHeight(pos)` in `src/player/collision.ts` (raycasts against `world.tilesGroup`, which works on geometry with no textures). Add `three-mesh-bvh` only if FPS drops. |
+| **Collision** | `src/player/collision.ts` raycasts against `world.tilesGroup` for wall sliding and ground height. The controller adds temporary test ground and randomly placed box walls; remove `initCollisionTestGeometry()` from `src/player/controller.ts` when real terrain is ready. `initController({ onStunned: (duration) => { ... } })` exposes fast-collision stuns for audio or entity AI. Add `three-mesh-bvh` only if FPS drops. |
 | **Spatial audio** | Attach `THREE.PositionalAudio` to each entry in `world.agents` (footsteps, engines). |
 | **Entity AI** | Use the OSM path graph from `src/world/osm.ts` for pathfinding; move towards the player's last noise position. Render it with the shared material too. |
 
