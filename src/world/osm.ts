@@ -7,12 +7,15 @@
  * latLonToLocal() uses the same WGS84 frame as ReorientationPlugin in tiles.ts, so OSM and
  * tiles share one coordinate system: Y up, metres, +X = west, +Z = north, origin at ORIGIN_LAT/LON.
  *
- * For the entity AI: getPathGraph('footway' | 'road') returns the graph clipped to PLAY_RADIUS
+ * For the entity AI: getPathGraph('footway' | 'road') returns the graph clipped to the play corridor
  * once initAgents() has loaded the data; nearestNode() finds where to start a path search.
+ * scripts/fetch-osm.mjs already clips ways to the corridor (boundary nodes sit on the walls); the
+ * graph is clipped again here in case osm.json was fetched with different corridor settings.
  */
 import * as THREE from 'three';
 import { WGS84_ELLIPSOID } from '3d-tiles-renderer/three';
-import { ORIGIN_HEIGHT, ORIGIN_LAT, ORIGIN_LON, OSM_URL, PLAY_RADIUS, XZ_OFFSET, YAW_OFFSET } from '../config';
+import { ORIGIN_HEIGHT, ORIGIN_LAT, ORIGIN_LON, OSM_URL, XZ_OFFSET, YAW_OFFSET } from '../config';
+import { isInsidePlayArea } from './playArea';
 
 export type OsmWayKind = 'footway' | 'road';
 
@@ -65,8 +68,11 @@ export interface PathGraph {
 export interface PathGraphOptions {
   /** Only include ways whose highway tag is in this list (default: every way of the kind). */
   highways?: readonly string[];
-  /** Only include edges with both ends within this distance of the origin (default PLAY_RADIUS). */
-  radius?: number;
+  /**
+   * Only include edges with both ends inside the play corridor grown by this many metres
+   * (default 0.5, so nodes the fetch script put exactly on the boundary are kept).
+   */
+  corridorMargin?: number;
 }
 
 /** Paths people walk on; must match FOOTWAY_HIGHWAYS in scripts/fetch-osm.mjs. */
@@ -145,14 +151,14 @@ export function getOsmData(): OsmData | null {
   return loaded;
 }
 
-/** Full footway or road graph within PLAY_RADIUS (null until loadOsm() has run). For the entity AI. */
+/** Full footway or road graph inside the play corridor (null until loadOsm() has run). For the entity AI. */
 export function getPathGraph(kind: OsmWayKind): PathGraph | null {
   return graphs[kind] ?? null;
 }
 
 /** Build a walkable (footway) or drivable (road) graph from loaded OSM data. */
 export function buildPathGraph(data: OsmData, kind: OsmWayKind, options: PathGraphOptions = {}): PathGraph {
-  const radius = options.radius ?? PLAY_RADIUS;
+  const margin = options.corridorMargin ?? 0.5;
   const allowed = options.highways ? new Set(options.highways) : null;
 
   const nodeById = new Map<number, OsmNode>();
@@ -198,7 +204,7 @@ export function buildPathGraph(data: OsmData, kind: OsmWayKind, options: PathGra
       const pa = local(idA);
       const pb = local(idB);
       if (!pa || !pb) continue;
-      if (Math.hypot(pa.x, pa.z) > radius || Math.hypot(pb.x, pb.z) > radius) continue;
+      if (!isInsidePlayArea(pa, margin) || !isInsidePlayArea(pb, margin)) continue;
 
       const key = idA < idB ? `${idA}:${idB}` : `${idB}:${idA}`;
       if (seen.has(key)) continue;
