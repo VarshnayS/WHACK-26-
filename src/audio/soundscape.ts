@@ -5,12 +5,15 @@
  * autoplay rule). Later gestures only resume it if the browser suspended it.
  *
  * The AudioListener follows the camera position and orientation every frame. Sources:
- *   - CARS: procedural engine (detuned saws + sub, low-passed, rough AM) + tyre/road noise; pitch and
- *     level follow speed, with an (exaggerated) Doppler shift as they pass. Nearest MAX_CAR_VOICES.
- *   - PEDESTRIANS: soft footstep taps synced to their walk cycle (onPedestrianStep from
+ *   - CARS: a recorded engine loop per car (random crossfaded excerpts, SampleLoop), low-passed and
+ *     pitched down, or the procedural engine if it didn't load; low road rumble; a pass-by recording
+ *     lined up with the car's closest approach. Pitch and level follow speed, with a mild Doppler
+ *     shift. All cars share CAR_VOLUME, fall off steeply with distance and fade in / out at the edge
+ *     of CAR_AUDIBLE_RADIUS. Nearest MAX_CAR_VOICES.
+ *   - PEDESTRIANS: recorded footsteps synced to their walk cycle (onPedestrianStep from
  *     src/world/soundSources.ts, at the step itself; the faint ping follows 0.3–0.5 s later like an
- *     echo), and murmured conversation in groups: a voiced source through
- *     moving formant filters with syllable envelopes; group members take turns.
+ *     echo), and conversation in groups within MURMUR_RADIUS: random excerpts of recorded chatter
+ *     (SFX_FILES.chatter) or, without recordings, a synth murmur; group members take turns.
  *   - PLAYER: own footsteps / idle shuffle (from the 'footstep' pings of src/senses/footsteps.ts),
  *     cane taps (from 'cane' pings), a heavy thud + ear ringing on world 'stunned'.
  *   - ENTITY (when world.entity exists): slow, uneven, dragging steps, louder as it approaches.
@@ -19,7 +22,8 @@
  * Reads world.agents, world.pings and world.entity only. Never fires a ping.
  * Budget: ≤ 4 engines + 2 conversations + 4 one-shot panners + 1 entity ≈ 10 HRTF voices; sources
  * fade in/out as they are picked. Keys: U mute, `,` / `.` volume down / up (saved per browser).
- * Recordings can replace any sound: see SFX_FILES in ./soundscapeConfig.ts (public/sfx/).
+ * Recordings (SFX_FILES in ./soundscapeConfig.ts, files in public/sfx/, credits in
+ * public/sfx/CREDITS.md) are fetched and decoded at page load, behind the start screen.
  */
 import * as THREE from 'three';
 import type { Agent, World } from '../world';
@@ -82,70 +86,177 @@ function lfo(ctx: AudioContext, hz: number, depth: number, target: AudioParam): 
   return osc;
 }
 
+// --- recorded loops -----------------------------------------------------------------------------
+
+/** Equal-power fade curves for crossfading excerpts. */
+const FADE_IN_CURVE = new Float32Array(64).map((_, i) => Math.sin((i / 63) * Math.PI * 0.5));
+const FADE_OUT_CURVE = new Float32Array(64).map((_, i) => Math.cos((i / 63) * Math.PI * 0.5));
+/** Skipped at each end of a decoded file (MP3 encoder padding, edits). */
+const EDGE = 0.05;
+
+/**
+ * Loops a recording smoothly: plays random excerpts of it back to back, each crossfaded into the
+ * next (equal power). No seam ever plays, and the random offsets hide the loop length.
+ */
+class SampleLoop {
+  private rate = 1;
+  private nextAt = 0;
+  private running = false;
+  private readonly live: AudioBufferSourceNode[] = [];
+
+  constructor(
+    private readonly ctx: AudioContext,
+    private readonly buf: AudioBuffer,
+    private readonly out: AudioNode,
+    private readonly segment = C.ENGINE_LOOP_SEGMENT,
+    private readonly xfade = C.ENGINE_LOOP_XFADE,
+  ) {}
+
+  start(): void {
+    if (this.running) return;
+    this.running = true;
+    this.nextAt = this.ctx.currentTime + 0.02;
+    this.update();
+  }
+
+  /** Stop scheduling; excerpts already playing finish on their own (the voice fades out anyway). */
+  stop(): void {
+    this.running = false;
+  }
+
+  setRate(rate: number, t: number, tau: number): void {
+    this.rate = rate;
+    for (const src of this.live) src.playbackRate.setTargetAtTime(rate, t, tau);
+  }
+
+  update(): void {
+    if (!this.running) return;
+    const t = this.ctx.currentTime;
+    // never let the schedule fall behind (e.g. after the tab was hidden)
+    if (this.nextAt < t) this.nextAt = t + 0.02;
+    while (t >= this.nextAt - 0.15) {
+      this.schedule(this.nextAt);
+      this.nextAt += this.segment - this.xfade;
+    }
+  }
+
+  private schedule(t0: number): void {
+    const ctx = this.ctx;
+    const buf = this.buf;
+    // room for a whole excerpt even if the rate rises a little while it plays
+    const span = this.segment * this.rate * 1.3;
+    const offset = rand(EDGE, Math.max(EDGE, buf.duration - EDGE - span));
+    const src = new AudioBufferSourceNode(ctx, { buffer: buf, playbackRate: this.rate, loop: true });
+    // safety net only: if a very short file has to wrap, it wraps inside the padding-free region
+    src.loopStart = EDGE;
+    src.loopEnd = Math.max(EDGE * 2, buf.duration - EDGE);
+    const g = new GainNode(ctx, { gain: 0 });
+    g.gain.setValueCurveAtTime(FADE_IN_CURVE, t0, this.xfade);
+    g.gain.setValueCurveAtTime(FADE_OUT_CURVE, t0 + this.segment - this.xfade, this.xfade);
+    src.connect(g).connect(this.out);
+    src.start(t0, offset);
+    src.stop(t0 + this.segment + 0.02);
+    this.live.push(src);
+    src.onended = () => {
+      g.disconnect();
+      const i = this.live.indexOf(src);
+      if (i >= 0) this.live.splice(i, 1);
+    };
+  }
+}
+
 // --- cars ---------------------------------------------------------------------------------------
 
 const tmpDir = new THREE.Vector3();
 const tmpRel = new THREE.Vector3();
 
+/** Distance gain of the car panners (inverse model), for the pass-by level compensation. */
+function carDistanceGain(d: number): number {
+  const ref = C.CAR_PANNER_REF_DISTANCE;
+  return ref / (ref + C.CAR_PANNER_ROLLOFF * (Math.max(d, ref) - ref));
+}
+
+/** Pass-by recordings started so far (debug, stats()). */
+let passByCount = 0;
+
+function smoothstep(a: number, b: number, x: number): number {
+  const t = clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
 class CarVoice {
   agent: Agent | null = null;
+  /** Pass-by recordings (SFX_FILES.passBy), or none. */
+  passBuffers: AudioBuffer[] = [];
   private readonly out: GainNode;
+  private readonly level: GainNode;
   private readonly panner: PannerNode;
   private readonly oscBus: GainNode;
-  private readonly saw1: OscillatorNode;
-  private readonly saw2: OscillatorNode;
-  private readonly sub: OscillatorNode;
+  private readonly oscs: OscillatorNode[];
+  private readonly roughness: OscillatorNode[];
   private readonly lowpass: BiquadFilterNode;
   private readonly engineGain: GainNode;
+  private readonly duck: GainNode;
   private readonly tyreGain: GainNode;
   private readonly tyreFilter: BiquadFilterNode;
   private readonly tyreSrc: AudioBufferSourceNode;
-  private sample: AudioBufferSourceNode | null = null;
+  private loop: SampleLoop | null = null;
+  private detune = 1;
   private connected = false;
   private releaseAt = 0;
+  /** Pass-by state for the current agent. */
+  private passed = false;
+  private passSrc: AudioBufferSourceNode | null = null;
+  private passGain: GainNode | null = null;
+  private passEnd = 0;
 
   constructor(
     private readonly ctx: AudioContext,
     noise: AudioBuffer,
     private readonly dest: AudioNode,
   ) {
+    // sources -> duck -> out (pick / drop fade) -> level (range fade) -> panner -> car bus
     this.out = new GainNode(ctx, { gain: 0 });
-    this.panner = makePanner(ctx);
-    this.out.connect(this.panner);
+    this.level = new GainNode(ctx, { gain: 0 });
+    this.panner = makePanner(ctx, C.CAR_PANNER_REF_DISTANCE, C.CAR_PANNER_ROLLOFF);
+    this.out.connect(this.level).connect(this.panner);
+    this.duck = new GainNode(ctx, { gain: 1 });
+    this.duck.connect(this.out);
 
     this.oscBus = new GainNode(ctx, { gain: 1 });
-    this.saw1 = new OscillatorNode(ctx, { type: 'sawtooth', frequency: C.ENGINE_HZ_IDLE });
-    this.saw2 = new OscillatorNode(ctx, { type: 'sawtooth', frequency: C.ENGINE_HZ_IDLE * 2.01 });
-    this.sub = new OscillatorNode(ctx, { type: 'square', frequency: C.ENGINE_HZ_IDLE * 0.5 });
+    const saw1 = new OscillatorNode(ctx, { type: 'sawtooth', frequency: C.ENGINE_HZ_IDLE });
+    const saw2 = new OscillatorNode(ctx, { type: 'sawtooth', frequency: C.ENGINE_HZ_IDLE * 2.01 });
+    const sub = new OscillatorNode(ctx, { type: 'square', frequency: C.ENGINE_HZ_IDLE * 0.5 });
+    this.oscs = [saw1, saw2, sub];
     const g2 = new GainNode(ctx, { gain: 0.35 });
     const gSub = new GainNode(ctx, { gain: 0.4 });
-    this.saw1.connect(this.oscBus);
-    this.saw2.connect(g2).connect(this.oscBus);
-    this.sub.connect(gSub).connect(this.oscBus);
-    this.lowpass = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: 300, Q: 2 });
+    saw1.connect(this.oscBus);
+    saw2.connect(g2).connect(this.oscBus);
+    sub.connect(gSub).connect(this.oscBus);
+    this.lowpass = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: C.ENGINE_LOWPASS_IDLE, Q: 0.7 });
     this.engineGain = new GainNode(ctx, { gain: C.ENGINE_GAIN_IDLE });
-    this.oscBus.connect(this.lowpass).connect(this.engineGain).connect(this.out);
-    // roughness: fast irregular amplitude wobble (cylinder firing unevenness)
-    lfo(ctx, rand(11, 17), 0.12, this.engineGain.gain);
-    lfo(ctx, rand(5, 7), 0.06, this.engineGain.gain);
+    this.oscBus.connect(this.lowpass).connect(this.engineGain).connect(this.duck);
+    // roughness: fast irregular amplitude wobble (cylinder firing unevenness), synth engine only
+    this.roughness = [lfo(ctx, rand(11, 17), 0.1, this.engineGain.gain), lfo(ctx, rand(5, 7), 0.05, this.engineGain.gain)];
 
+    // tyre / road noise: low rumble, not a jet-like hiss
     this.tyreSrc = noiseSource(ctx, noise);
-    this.tyreFilter = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: 900, Q: 0.6 });
+    this.tyreFilter = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: C.TYRE_LOWPASS_SLOW, Q: 0.5 });
     this.tyreGain = new GainNode(ctx, { gain: 0 });
-    this.tyreSrc.connect(this.tyreFilter).connect(this.tyreGain).connect(this.out);
+    this.tyreSrc.connect(this.tyreFilter).connect(this.tyreGain).connect(this.duck);
 
     const t = ctx.currentTime;
-    this.saw1.start(t);
-    this.saw2.start(t);
-    this.sub.start(t);
+    for (const o of this.oscs) o.start(t);
   }
 
-  /** Replace the oscillators with a recorded engine loop (SFX_FILES.engine). */
+  /** Replace the oscillators with a recorded engine loop (one of SFX_FILES.engine). */
   useSample(buf: AudioBuffer): void {
-    if (this.sample) return;
-    this.sample = noiseSource(this.ctx, buf);
-    this.sample.connect(this.lowpass);
-    this.oscBus.gain.value = 0;
+    if (this.loop) return;
+    this.loop = new SampleLoop(this.ctx, buf, this.lowpass);
+    this.detune = 1 + rand(-C.ENGINE_SAMPLE_DETUNE, C.ENGINE_SAMPLE_DETUNE);
+    this.oscBus.disconnect();
+    for (const o of [...this.oscs, ...this.roughness]) o.stop();
+    if (this.connected) this.loop.start();
   }
 
   get free(): boolean {
@@ -154,35 +265,41 @@ class CarVoice {
 
   assign(agent: Agent): void {
     this.agent = agent;
+    this.passed = false;
     if (!this.connected) {
       this.panner.connect(this.dest);
       this.connected = true;
     }
-    this.out.gain.setTargetAtTime(1, this.ctx.currentTime, C.FADE_TAU);
+    this.loop?.start();
+    this.out.gain.setTargetAtTime(1, this.ctx.currentTime, C.CAR_FADE_TAU);
   }
 
   release(): void {
     if (!this.agent) return;
     this.agent = null;
     const t = this.ctx.currentTime;
-    this.out.gain.setTargetAtTime(0, t, C.FADE_TAU);
-    this.releaseAt = t + C.FADE_TAU * 6;
+    this.out.gain.setTargetAtTime(0, t, C.CAR_FADE_TAU);
+    this.releaseAt = t + C.CAR_FADE_TAU * 6;
+    this.passSrc?.stop(this.releaseAt);
   }
 
   update(listener: THREE.Vector3, listenerVel: THREE.Vector3): void {
     const t = this.ctx.currentTime;
     if (!this.agent) {
       if (this.connected && t >= this.releaseAt) {
+        this.loop?.stop();
         this.panner.disconnect();
         this.connected = false;
       }
       return;
     }
+    this.loop?.update();
     const a = this.agent;
     const p = a.position;
     setPannerPos(this.panner, p.x, p.y + 0.5, p.z);
 
-    const s = clamp(Math.hypot(a.velocity.x, a.velocity.z) / C.CAR_FULL_SPEED, 0, 1);
+    const speed = Math.hypot(a.velocity.x, a.velocity.z);
+    const s = clamp(speed / C.CAR_FULL_SPEED, 0, 1);
     // Doppler: approach speed along the line from the car to the listener
     tmpDir.copy(listener).sub(p);
     const d = tmpDir.length();
@@ -194,17 +311,82 @@ class CarVoice {
     const c = C.SPEED_OF_SOUND;
     const doppler = c / (c - clamp(approach * C.DOPPLER_EXAGGERATION, -0.5 * c, 0.5 * c));
 
-    const f0 = lerp(C.ENGINE_HZ_IDLE, C.ENGINE_HZ_FULL, s) * doppler;
+    // fade in / out over the outer part of the hearing range (on top of the panner's falloff)
+    const range = 1 - smoothstep(C.CAR_AUDIBLE_RADIUS * C.CAR_FADE_START, C.CAR_AUDIBLE_RADIUS, d);
     const tau = 0.06;
-    this.saw1.frequency.setTargetAtTime(f0, t, tau);
-    this.saw2.frequency.setTargetAtTime(f0 * 2.01, t, tau);
-    this.sub.frequency.setTargetAtTime(f0 * 0.5, t, tau);
-    this.lowpass.frequency.setTargetAtTime(lerp(260, 1100, s) * doppler, t, tau);
+    this.level.gain.setTargetAtTime(range, t, 0.2);
+
+    if (this.loop) {
+      this.loop.setRate(lerp(C.ENGINE_SAMPLE_RATE_IDLE, C.ENGINE_SAMPLE_RATE_FULL, s) * this.detune * doppler, t, tau);
+    } else {
+      const f0 = lerp(C.ENGINE_HZ_IDLE, C.ENGINE_HZ_FULL, s) * doppler;
+      this.oscs[0].frequency.setTargetAtTime(f0, t, tau);
+      this.oscs[1].frequency.setTargetAtTime(f0 * 2.01, t, tau);
+      this.oscs[2].frequency.setTargetAtTime(f0 * 0.5, t, tau);
+    }
+    this.lowpass.frequency.setTargetAtTime(lerp(C.ENGINE_LOWPASS_IDLE, C.ENGINE_LOWPASS_FULL, s) * doppler, t, tau);
     this.engineGain.gain.setTargetAtTime(lerp(C.ENGINE_GAIN_IDLE, C.ENGINE_GAIN_FULL, s), t, tau);
     this.tyreGain.gain.setTargetAtTime(C.TYRE_GAIN_FULL * s * s, t, tau);
-    this.tyreFilter.frequency.setTargetAtTime(lerp(500, 1300, s) * doppler, t, tau);
+    this.tyreFilter.frequency.setTargetAtTime(lerp(C.TYRE_LOWPASS_SLOW, C.TYRE_LOWPASS_FULL, s) * doppler, t, tau);
     this.tyreSrc.playbackRate.setTargetAtTime(doppler, t, tau);
-    if (this.sample) this.sample.playbackRate.setTargetAtTime(lerp(0.7, 1.3, s) * doppler, t, tau);
+
+    this.updatePassBy(listener, listenerVel, d, speed, t);
+  }
+
+  /**
+   * Plays the pass-by recording for a car about to pass close by, starting part-way in so that the
+   * recording's loudest moment lands on the car's closest approach.
+   */
+  private updatePassBy(listener: THREE.Vector3, listenerVel: THREE.Vector3, d: number, speed: number, t: number): void {
+    const a = this.agent!;
+    if (this.passGain && t < this.passEnd) {
+      // the recording already swells and fades with distance: undo half of the panner's falloff
+      // so the swell isn't counted twice
+      const comp = clamp(1 / Math.sqrt(carDistanceGain(d)), 1, 4);
+      this.passGain.gain.setTargetAtTime(C.PASSBY_GAIN * comp, t, 0.05);
+    }
+    if (this.passed || !this.passBuffers.length || speed < 3) return;
+    // time and distance of closest approach (horizontal, relative motion)
+    const rx = a.position.x - listener.x;
+    const rz = a.position.z - listener.z;
+    const vx = a.velocity.x - listenerVel.x;
+    const vz = a.velocity.z - listenerVel.z;
+    const v2 = vx * vx + vz * vz;
+    if (v2 < 1) return;
+    const tca = -(rx * vx + rz * vz) / v2;
+    if (tca <= 0) {
+      this.passed = true; // already going away: no pass-by for this car
+      return;
+    }
+    if (tca > C.PASSBY_LEAD) return;
+    this.passed = true;
+    const miss = Math.hypot(rx + vx * tca, rz + vz * tca);
+    if (miss > C.PASSBY_MAX_DISTANCE) return;
+
+    const ctx = this.ctx;
+    const buf = pick(this.passBuffers);
+    const rate = rand(0.94, 1.04);
+    const offset = clamp(C.PASSBY_PEAK - tca * rate, 0, buf.duration - 1);
+    const src = new AudioBufferSourceNode(ctx, { buffer: buf, playbackRate: rate });
+    const g = new GainNode(ctx, { gain: 0 });
+    g.gain.setTargetAtTime(C.PASSBY_GAIN, t, 0.15);
+    src.connect(g).connect(this.out);
+    src.start(t, offset);
+    passByCount++;
+    this.passEnd = t + (buf.duration - offset) / rate;
+    this.passSrc = src;
+    this.passGain = g;
+    src.onended = () => {
+      g.disconnect();
+      if (this.passSrc === src) {
+        this.passSrc = null;
+        this.passGain = null;
+      }
+    };
+    // the recording carries its own engine: dip the loop while it plays
+    this.duck.gain.cancelScheduledValues(t);
+    this.duck.gain.setTargetAtTime(C.PASSBY_ENGINE_DUCK, t, 0.4);
+    this.duck.gain.setTargetAtTime(1, Math.max(t + 0.5, this.passEnd - 1.5), 0.8);
   }
 }
 
@@ -228,7 +410,12 @@ class MurmurVoice {
   private readonly env: GainNode;
   private readonly panner: PannerNode;
   private readonly glottis: OscillatorNode;
+  private readonly breath: AudioBufferSourceNode;
   private readonly f: BiquadFilterNode[];
+  /** Recorded chatter (SFX_FILES.chatter): when set, lines are excerpts of these instead of synth. */
+  private samples: AudioBuffer[] = [];
+  private sampleBus: BiquadFilterNode | null = null;
+  private lastClip = -1;
   private connected = false;
   private releaseAt = 0;
   private nextPhraseAt = 0;
@@ -248,11 +435,11 @@ class MurmurVoice {
     this.out.connect(this.panner);
 
     this.glottis = new OscillatorNode(ctx, { type: 'sawtooth', frequency: 130 });
-    const breath = noiseSource(ctx, noise);
+    this.breath = noiseSource(ctx, noise);
     const breathGain = new GainNode(ctx, { gain: 0.25 });
     const src = new GainNode(ctx, { gain: 1 });
     this.glottis.connect(src);
-    breath.connect(breathGain).connect(src);
+    this.breath.connect(breathGain).connect(src);
 
     const sum = new GainNode(ctx, { gain: 1 });
     const levels = [1, 0.55, 0.25];
@@ -266,6 +453,16 @@ class MurmurVoice {
     this.env = new GainNode(ctx, { gain: 0 });
     sum.connect(muffle).connect(this.env).connect(this.out);
     this.glottis.start();
+  }
+
+  /** Switch from the synth murmur to recorded chatter. */
+  useSamples(bufs: AudioBuffer[]): void {
+    if (this.sampleBus || !bufs.length) return;
+    this.samples = bufs;
+    this.glottis.stop();
+    this.breath.stop();
+    this.sampleBus = new BiquadFilterNode(this.ctx, { type: 'lowpass', frequency: C.CHATTER_LOWPASS, Q: 0.5 });
+    this.sampleBus.connect(this.out);
   }
 
   get free(): boolean {
@@ -290,7 +487,7 @@ class MurmurVoice {
       this.panner.connect(this.dest);
       this.connected = true;
     }
-    this.out.gain.setTargetAtTime(C.MURMUR_GAIN, t, C.FADE_TAU);
+    this.out.gain.setTargetAtTime(this.sampleBus ? C.CHATTER_GAIN : C.MURMUR_GAIN, t, C.FADE_TAU);
   }
 
   release(): void {
@@ -310,6 +507,10 @@ class MurmurVoice {
     this.lastSpeaker = who;
     this.queuedSpeaker = who;
     this.queuedStart = t0;
+    if (this.sampleBus) {
+      this.scheduleLine(t0, who);
+      return;
+    }
 
     const base = this.pitch[who];
     const fs = this.formantScale[who];
@@ -333,6 +534,38 @@ class MurmurVoice {
     env.setTargetAtTime(0, t, 0.05);
     // pause before the next turn; now and then a longer lull
     this.nextPhraseAt = t + (Math.random() < 0.15 ? rand(2, 6) : rand(0.2, 0.9));
+  }
+
+  /**
+   * One recorded line: a random excerpt of a random chatter clip (not the one just used), at a
+   * slightly different speed each time and pitched to the speaker, with soft edges.
+   */
+  private scheduleLine(t0: number, who: number): void {
+    const ctx = this.ctx;
+    const n = this.samples.length;
+    let k = Math.floor(Math.random() * n);
+    if (n > 1 && k === this.lastClip) k = (k + 1 + Math.floor(Math.random() * (n - 1))) % n;
+    this.lastClip = k;
+    const buf = this.samples[k];
+    // each speaker keeps a slightly different "voice" (formantScale ~1..1.2 -> ±4 %), plus jitter
+    const voice = 0.96 + (this.formantScale[who] - 1) * 0.4;
+    const rate = clamp(voice * (1 + rand(-C.CHATTER_RATE_JITTER, C.CHATTER_RATE_JITTER)), 0.85, 1.15);
+    const dur = Math.min(rand(C.CHATTER_LINE_MIN, C.CHATTER_LINE_MAX), (buf.duration - 2 * EDGE) / rate);
+    const offset = rand(EDGE, Math.max(EDGE, buf.duration - EDGE - dur * rate));
+    const src = new AudioBufferSourceNode(ctx, { buffer: buf, playbackRate: rate });
+    const g = new GainNode(ctx, { gain: 0 });
+    const edge = Math.min(0.12, dur / 4);
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(1, t0 + edge);
+    g.gain.setValueAtTime(1, t0 + dur - edge);
+    g.gain.linearRampToValueAtTime(0, t0 + dur);
+    src.connect(g).connect(this.sampleBus!);
+    src.start(t0, offset);
+    src.stop(t0 + dur + 0.02);
+    src.onended = () => g.disconnect();
+    const lull = Math.random() < C.CHATTER_LULL_CHANCE;
+    this.nextPhraseAt =
+      t0 + dur + (lull ? rand(C.CHATTER_LULL_MIN, C.CHATTER_LULL_MAX) : rand(C.CHATTER_GAP_MIN, C.CHATTER_GAP_MAX));
   }
 
   update(): void {
@@ -359,6 +592,50 @@ interface OneShotSlot {
   busyUntil: number;
 }
 
+// --- recordings (fetched + decoded behind the start screen) -------------------------------------
+
+type Recordings = Map<SfxName, AudioBuffer[]>;
+let recordings: Promise<Recordings> | null = null;
+
+async function loadRecording(decoder: BaseAudioContext, path: string): Promise<AudioBuffer | null> {
+  try {
+    const res = await fetch(import.meta.env.BASE_URL + path.replace(/^\//, ''));
+    if (!res.ok) return null;
+    return await decoder.decodeAudioData(await res.arrayBuffer());
+  } catch {
+    return null; // missing or undecodable: that sound stays procedural
+  }
+}
+
+/**
+ * Fetch and decode every file in SFX_FILES once, starting at page load (before "Click to begin"),
+ * with an OfflineAudioContext: AudioBuffers can be played by any context, so nothing is decoded
+ * mid-game. Never rejects; files that fail are left out.
+ */
+function preloadRecordings(): Promise<Recordings> {
+  if (recordings) return recordings;
+  recordings = (async () => {
+    const out: Recordings = new Map();
+    let decoder: BaseAudioContext;
+    try {
+      decoder = new OfflineAudioContext(1, 1, 44100);
+    } catch {
+      return out;
+    }
+    const entries = Object.entries(C.SFX_FILES) as [SfxName, string[]][];
+    await Promise.all(
+      entries.map(async ([name, paths]) => {
+        const bufs = (await Promise.all(paths.map((p) => loadRecording(decoder, p)))).filter(
+          (b): b is AudioBuffer => b !== null,
+        );
+        if (bufs.length) out.set(name, bufs);
+      }),
+    );
+    return out;
+  })();
+  return recordings;
+}
+
 // --- the soundscape -----------------------------------------------------------------------------
 
 class Soundscape {
@@ -366,6 +643,7 @@ class Soundscape {
   private master!: GainNode;
   private playerBus!: GainNode;
   private spatialBus!: GainNode;
+  private carBus!: GainNode;
   private ambientBus!: GainNode;
   private tinnitus!: GainNode;
   private entityPanner!: PannerNode;
@@ -373,6 +651,8 @@ class Soundscape {
   private cars: CarVoice[] = [];
   private murmurs: MurmurVoice[] = [];
   private slots: OneShotSlot[] = [];
+  /** Which sounds are recordings (for stats()). */
+  private recorded: SfxName[] = [];
 
   private volume = C.MASTER_VOLUME;
   private muted = false;
@@ -415,6 +695,7 @@ class Soundscape {
     this.world.on('stunned', this.onStunned);
     this.world.onUpdate(this.update);
     this.offStep = onPedestrianStep(this.onPedStep);
+    void preloadRecordings(); // behind the start screen
   }
 
   dispose(): void {
@@ -453,15 +734,17 @@ class Soundscape {
     this.playerBus = new GainNode(ctx, { gain: 1 });
     this.spatialBus = new GainNode(ctx, { gain: 1 });
     this.ambientBus = new GainNode(ctx, { gain: 1 });
+    this.carBus = new GainNode(ctx, { gain: C.CAR_VOLUME });
     this.playerBus.connect(this.master);
     this.spatialBus.connect(this.master);
+    this.carBus.connect(this.spatialBus);
     this.ambientBus.connect(this.master);
 
     this.buffers = renderOneShots(ctx);
     const white = whiteNoise(ctx);
     const brown = brownNoise(ctx);
 
-    for (let i = 0; i < C.MAX_CAR_VOICES; i++) this.cars.push(new CarVoice(ctx, white, this.spatialBus));
+    for (let i = 0; i < C.MAX_CAR_VOICES; i++) this.cars.push(new CarVoice(ctx, brown, this.carBus));
     for (let i = 0; i < C.MAX_MURMUR_VOICES; i++) this.murmurs.push(new MurmurVoice(ctx, white, this.spatialBus));
     for (let i = 0; i < C.MAX_ONESHOT_VOICES; i++) {
       const input = new GainNode(ctx, { gain: 1 });
@@ -481,7 +764,7 @@ class Soundscape {
     this.buildAmbient(ctx, white, brown);
     this.lastPingStart = performance.now() / 1000; // only react to pings fired from now on
     this.lastListenerPos.copy(this.world.camera.position);
-    void this.loadFiles(ctx);
+    void preloadRecordings().then((files) => this.useRecordings(ctx, files));
     console.info('[soundscape] started (U mute, , / . volume)');
   }
 
@@ -506,30 +789,21 @@ class Soundscape {
     lfo(ctx, 0.045, 0.6, windPan.pan);
   }
 
-  /** Load the optional recordings listed in SFX_FILES (none by default). */
-  private async loadFiles(ctx: AudioContext): Promise<void> {
-    for (const [name, urls] of Object.entries(C.SFX_FILES) as [SfxName, string[]][]) {
-      if (!urls?.length) continue;
-      try {
-        const bufs = await Promise.all(
-          urls.map(async (url) => {
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-            return ctx.decodeAudioData(await res.arrayBuffer());
-          }),
-        );
-        if (this.ctx !== ctx) return;
-        if (name === 'engine') for (const car of this.cars) car.useSample(bufs[0]);
-        else if (name === 'ambient') {
-          this.ambientBus.gain.value = 0;
-          const loop = noiseSource(ctx, bufs[0]);
-          loop.connect(new GainNode(ctx, { gain: 0.5 })).connect(this.master);
-        } else this.buffers.set(name, bufs);
-        console.info(`[soundscape] using recorded '${name}' (${bufs.length} file(s))`);
-      } catch (err) {
-        console.warn(`[soundscape] could not load '${name}', keeping the synth:`, err);
-      }
+  /** Swap the synth for the recordings that loaded (usually all of them, before the first frame). */
+  private useRecordings(ctx: AudioContext, files: Recordings): void {
+    if (this.ctx !== ctx) return;
+    for (const [name, bufs] of files) {
+      if (name === 'engine') for (const car of this.cars) car.useSample(pick(bufs));
+      else if (name === 'passBy') for (const car of this.cars) car.passBuffers = bufs;
+      else if (name === 'chatter') for (const m of this.murmurs) m.useSamples(bufs);
+      else if (name === 'ambient') {
+        this.ambientBus.gain.value = 0;
+        const loop = noiseSource(ctx, bufs[0]);
+        loop.connect(new GainNode(ctx, { gain: 0.5 })).connect(this.master);
+      } else this.buffers.set(name, bufs);
+      this.recorded.push(name);
     }
+    console.info(`[soundscape] recordings: ${this.recorded.join(', ') || 'none'} (the rest is procedural)`);
   }
 
   // --- playback helpers ----------------------------------------------------------------------------
@@ -547,7 +821,7 @@ class Soundscape {
   }
 
   /** Spatial one-shot through a pooled HRTF panner; skipped if every slot is busy. */
-  private playAt(name: SfxName, pos: THREE.Vector3, gain: number): void {
+  private playAt(name: SfxName, pos: THREE.Vector3, gain: number, rate = rand(0.92, 1.08)): void {
     const ctx = this.ctx;
     const list = this.buffers.get(name);
     if (!ctx || !list?.length) return;
@@ -561,7 +835,6 @@ class Soundscape {
     }
     if (!slot) return;
     const buf = pick(list);
-    const rate = rand(0.92, 1.08);
     setPannerPos(slot.panner, pos.x, pos.y, pos.z);
     const src = new AudioBufferSourceNode(ctx, { buffer: buf, playbackRate: rate });
     const g = new GainNode(ctx, { gain });
@@ -673,7 +946,9 @@ class Soundscape {
   private readonly onPedStep = (agent: Agent, speed: number): void => {
     if (!this.ctx || this.ctx.state !== 'running') return;
     if (agent.position.distanceToSquared(this.listenerPos) > C.PED_STEP_RADIUS * C.PED_STEP_RADIUS) return;
-    this.playAt('pedStep', agent.position, C.PED_STEP_GAIN * clamp(speed / 1.6, 0.5, 1));
+    const jitter = 1 + rand(-C.PED_STEP_GAIN_JITTER, 0);
+    const rate = 1 + rand(-C.PED_STEP_RATE_JITTER, C.PED_STEP_RATE_JITTER);
+    this.playAt('pedStep', agent.position, C.PED_STEP_GAIN * clamp(speed / 1.6, 0.5, 1) * jitter, rate);
   };
 
   private assignCars(): void {
@@ -822,8 +1097,18 @@ class Soundscape {
   };
 
   /** Debug snapshot (also handy from the console). */
-  stats(): { running: boolean; cars: number; conversations: number; volume: number; muted: boolean } {
+  stats(): {
+    running: boolean;
+    cars: number;
+    conversations: number;
+    volume: number;
+    muted: boolean;
+    recorded: SfxName[];
+    passBys: number;
+  } {
     return {
+      recorded: this.recorded.slice(),
+      passBys: passByCount,
       running: this.ctx?.state === 'running',
       cars: this.cars.filter((v) => v.agent).length,
       conversations: this.murmurs.filter((m) => m.members.length > 0).length,
