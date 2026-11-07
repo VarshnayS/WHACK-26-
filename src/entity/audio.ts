@@ -5,10 +5,11 @@
  * Everything is generated in src/entity/synth.ts and played through THREE.PositionalAudio
  * attached to the entity's body, so it comes from where it really is (wear headphones).
  *
- * Audible ranges (linear fall-off to silence):
- *   footsteps  ~35 m        how you usually first notice it
- *   breathing  ~12 m        means it's close
- *   voice      ~60 m        gasp when it hears you, growl when it hunts, shriek when it catches you
+ * Volume follows distance explicitly: full volume inside each sound's near distance, falling off
+ * steeply (squared) to silence at its far distance. The panner only gives direction.
+ *   footsteps  near 2 m, silent beyond 50 m    how you usually first notice it
+ *   breathing  near 1 m, silent beyond 15 m    means it's close
+ *   voice      near 3 m, silent beyond 60 m    gasp when it hears you, growl when it surges, shriek on a catch
  *
  * The AudioListener lives on the camera. If another module already added one, it is reused.
  */
@@ -20,6 +21,16 @@ import { breathCycle, footstep, gasp, growl, shriek } from './synth';
 interface Voice {
   audio: THREE.PositionalAudio;
   bus: GainNode;
+  /** Full volume within this distance (m). */
+  near: number;
+  /** Silent beyond this distance (m). */
+  far: number;
+}
+
+/** 1 within `near`, 0 beyond `far`, squared in between so it swells noticeably as it closes in. */
+export function distanceGain(d: number, near: number, far: number): number {
+  const t = THREE.MathUtils.clamp((far - d) / (far - near), 0, 1);
+  return t * t;
 }
 
 const STRIDE: Record<EntityStateName, number> = {
@@ -38,7 +49,6 @@ const BREATH: Record<EntityStateName, { gain: number; rate: number }> = {
 };
 
 let master = 1;
-let masterGains: GainNode[] = [];
 
 /** Find the AudioListener on the camera, or add one. */
 export function getListener(camera: THREE.Camera): THREE.AudioListener {
@@ -51,8 +61,7 @@ export function getListener(camera: THREE.Camera): THREE.AudioListener {
 
 /** Overall entity volume 0..1 (e.g. for a settings menu). */
 export function setEntityVolume(v: number): void {
-  master = Math.max(0, v);
-  for (const g of masterGains) g.gain.value = master;
+  master = Math.max(0, v); // applied on the next frame
 }
 
 export function initEntityAudio(brain: EntityBrain, body: THREE.Object3D, camera: THREE.Camera): (dt: number) => void {
@@ -81,24 +90,24 @@ export function initEntityAudio(brain: EntityBrain, body: THREE.Object3D, camera
     shriek: toBuffer(shriek(sr)),
   };
 
-  const makeVoice = (y: number, ref: number, max: number): Voice => {
+  const makeVoice = (y: number, near: number, far: number): Voice => {
     const audio = new THREE.PositionalAudio(listener);
+    // Direction only: distance loudness is applied by hand below (distanceGain).
     audio.panner.distanceModel = 'linear';
-    audio.setRefDistance(ref);
-    audio.setMaxDistance(max);
-    audio.setRolloffFactor(1);
+    audio.setRolloffFactor(0);
     const bus = ctx.createGain();
-    bus.gain.value = master;
-    masterGains.push(bus);
+    bus.gain.value = 0;
     audio.setNodeSource(bus as unknown as AudioBufferSourceNode);
     audio.position.y = y;
     body.add(audio);
-    return { audio, bus };
+    return { audio, bus, near, far };
   };
 
-  const feet = makeVoice(0.1, 3, 35);
-  const breathVoice = makeVoice(2.0, 1.5, 12);
-  const mouth = makeVoice(2.0, 4, 60);
+  const feet = makeVoice(0.1, 2, 50);
+  const breathVoice = makeVoice(2.0, 1, 15);
+  const mouth = makeVoice(2.0, 3, 60);
+  const voices = [feet, breathVoice, mouth];
+  const voicePos = new THREE.Vector3();
 
   const play = (voice: Voice, buffer: AudioBuffer, gain = 1, rate = 1): void => {
     if (ctx.state !== 'running') return;
@@ -144,6 +153,14 @@ export function initEntityAudio(brain: EntityBrain, body: THREE.Object3D, camera
 
   return () => {
     startBreath();
+
+    // Loudness from distance to the player (the camera).
+    const t = ctx.currentTime;
+    for (const v of voices) {
+      v.audio.getWorldPosition(voicePos);
+      const d = voicePos.distanceTo(camera.position);
+      v.bus.gain.setTargetAtTime(master * distanceGain(d, v.near, v.far), t, 0.05);
+    }
 
     // Footsteps from distance actually covered, with a limp: every other step is lighter.
     const moved = Math.hypot(brain.position.x - last.x, brain.position.z - last.z);

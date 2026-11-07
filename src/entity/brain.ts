@@ -10,7 +10,16 @@
  *   chase        heard a player sound within CHASE_RADIUS: walks straight at where it heard it at
  *                CHASE_SPEED, re-aiming at every new player sound; after LOSE_INTEREST_TIME with no
  *                new sound, back to patrol
- *   caught       within CATCH_RADIUS of the player; stops until reset()
+ * With OMNISCIENT on (the default) it always knows where the player is and walks the shortest
+ * route to them, so there is constant time pressure:
+ *   investigate  stalking: shortest path to the player at STALK_SPEED, ramping up the longer you last
+ *   chase        heard you (voice/impact/footstep/cane within hearing range): surges at
+ *                CHASE_BOOST_SPEED for BOOST_TIME
+ * With OMNISCIENT off it uses the hearing-only behaviour below.
+ *
+ *   caught       (event) within CATCH_RADIUS of the player: fires 'caught', then locks on and keeps
+ *                chasing the player's real position (at most one catch per CATCH_COOLDOWN). It still
+ *                gives up after LOSE_INTEREST_TIME with no new sound.
  */
 import * as THREE from 'three';
 import type { EntityStateName, PingType } from '../shared/contracts';
@@ -64,10 +73,17 @@ export class EntityBrain {
   timeSinceSound = Infinity;
   /** Horizontal speed this frame (m/s). */
   speed = 0;
+  /** Seconds since it started hunting (drives the speed ramp in OMNISCIENT mode). */
+  huntTime = 0;
+  private replanIn = 0;
 
   private waypoints: THREE.Vector3[] = [];
   private searchTime = 0;
   private arrived = false;
+  /** After a catch it tracks the player's real position, not just where it heard them. */
+  private lockedOn = false;
+  /** Seconds until another catch can fire. */
+  private catchCooldown = 0;
   private readonly env: BrainEnv;
   private readonly random: () => number;
   private readonly listeners = new Set<(e: BrainEvent) => void>();
@@ -102,6 +118,10 @@ export class EntityBrain {
     this.position.y = this.env.ground(this.position.x, this.position.z);
     this.velocity.set(0, 0, 0);
     this.timeSinceSound = Infinity;
+    this.lockedOn = false;
+    this.catchCooldown = 0;
+    this.huntTime = 0;
+    this.replanIn = 0;
     this.waypoints = [];
     this.target = null;
     this.setState('patrol');
@@ -121,6 +141,13 @@ export class EntityBrain {
     if (d >= hearingDistance(sound.type, sound.range)) return false;
 
     const isPlayer = C.PLAYER_TYPES.includes(sound.type);
+    if (C.OMNISCIENT) {
+      // It already knows where you are; hearing you just makes it surge.
+      if (!isPlayer) return false;
+      this.emit({ type: 'heard', sound });
+      this.timeSinceSound = 0;
+      return true;
+    }
     this.emit({ type: 'heard', sound });
 
     if (isPlayer && (d <= C.CHASE_RADIUS || this.state === 'chase')) {
@@ -149,8 +176,10 @@ export class EntityBrain {
       return;
     }
     this.timeSinceSound += dt;
+    this.catchCooldown = Math.max(0, this.catchCooldown - dt);
 
-    switch (this.state) {
+    if (C.OMNISCIENT) this.pursue(dt, playerPos);
+    else switch (this.state) {
       case 'patrol':
         if (this.waypoints.length === 0) this.pickPatrolTarget();
         break;
@@ -164,7 +193,11 @@ export class EntityBrain {
         break;
       case 'chase':
         if (this.timeSinceSound >= C.LOSE_INTEREST_TIME) this.backToPatrol();
-        else if (this.waypoints.length === 0) {
+        else if (this.lockedOn) {
+          // It has found you: follow your real position.
+          this.target = playerPos.clone();
+          this.waypoints = [this.target.clone()];
+        } else if (this.waypoints.length === 0) {
           this.arrived = true;
           this.searchStep(); // reached where it last heard you: prowl around it
         }
@@ -173,16 +206,36 @@ export class EntityBrain {
 
     this.move(dt);
 
-    if (distXZ(this.position, playerPos) < C.CATCH_RADIUS) {
-      this.waypoints = [];
-      this.velocity.set(0, 0, 0);
-      this.speed = 0;
-      this.setState('caught');
+    if (distXZ(this.position, playerPos) < C.CATCH_RADIUS && this.catchCooldown <= 0) {
+      this.catchCooldown = C.CATCH_COOLDOWN;
       this.emit({ type: 'caught' });
+      // Keep hunting: lock on to the player instead of stopping.
+      this.lockedOn = true;
+      this.timeSinceSound = 0;
+      if (this.state !== 'chase') this.setState('chase');
     }
   }
 
   // ---------------------------------------------------------------------------------------------
+
+  /** OMNISCIENT mode: shortest route to the player, re-planned every REPLAN_INTERVAL. */
+  private pursue(dt: number, playerPos: THREE.Vector3): void {
+    this.huntTime += dt;
+    const want: EntityStateName = this.timeSinceSound < C.BOOST_TIME ? 'chase' : 'investigate';
+    if (this.state !== want) this.setState(want);
+
+    const goal = this.env.clamp(playerPos.clone(), C.WALL_INSET);
+    this.replanIn -= dt;
+    if (this.replanIn <= 0 || this.waypoints.length === 0) {
+      this.replanIn = C.REPLAN_INTERVAL;
+      this.target = goal;
+      this.waypoints = this.plan(goal);
+    } else {
+      // Between re-plans keep the last waypoint on the player.
+      this.target = goal;
+      this.waypoints[this.waypoints.length - 1].copy(goal);
+    }
+  }
 
   private setState(s: EntityStateName): void {
     if (s === this.state) return;
@@ -198,6 +251,7 @@ export class EntityBrain {
   }
 
   private backToPatrol(): void {
+    this.lockedOn = false;
     this.waypoints = [];
     this.target = null;
     this.setState('patrol');
@@ -251,6 +305,10 @@ export class EntityBrain {
   }
 
   private currentSpeed(): number {
+    if (C.OMNISCIENT) {
+      if (this.state === 'chase') return C.CHASE_BOOST_SPEED;
+      return Math.min(C.STALK_MAX_SPEED, C.STALK_SPEED + C.STALK_RAMP * this.huntTime);
+    }
     if (this.state === 'chase') return C.CHASE_SPEED;
     if (this.state === 'investigate') return this.arrived ? C.PATROL_SPEED : C.INVESTIGATE_SPEED;
     if (this.state === 'patrol') return C.PATROL_SPEED;

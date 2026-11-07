@@ -6,6 +6,21 @@ import type { PingType } from '../shared/contracts';
 
 // --- movement --------------------------------------------------------------------------------------
 
+/**
+ * true: it always knows where the player is and takes the shortest route to them (constant time
+ * pressure); sounds make it surge. false: hearing-only patrol/investigate/chase.
+ */
+export const OMNISCIENT = true;
+/** OMNISCIENT: stalking speed at the start, how fast it ramps up (m/s per second hunting), and the cap. */
+export const STALK_SPEED = 1.4;
+export const STALK_RAMP = 0.015;
+export const STALK_MAX_SPEED = 3.0;
+/** OMNISCIENT: speed for BOOST_TIME after it hears a player sound (player run cap is 5.5). */
+export const CHASE_BOOST_SPEED = 3.5;
+export const BOOST_TIME = 5;
+/** OMNISCIENT: how often it re-plans the shortest route to the player. */
+export const REPLAN_INTERVAL = 0.5;
+
 /** Speed while wandering the footway graph. */
 export const PATROL_SPEED = 1.0;
 /** Speed while walking to a sound it heard. */
@@ -63,6 +78,8 @@ export const LOSE_INTEREST_TIME = 8;
 
 /** Catch distance (horizontal). */
 export const CATCH_RADIUS = 1.0;
+/** After a catch it keeps chasing; another 'caught' can't fire for this long. */
+export const CATCH_COOLDOWN = 3;
 
 // --- its own sounds --------------------------------------------------------------------------------
 
