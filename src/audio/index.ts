@@ -15,7 +15,7 @@
 import * as THREE from 'three';
 import { world as sharedWorld } from '../world';
 import type { PingType } from '../shared/contracts';
-import { initSoundscape } from './soundscape';
+import { initSoundscape, startSoundscape } from './soundscape';
 import { Calibrator } from './calibration';
 import { DebugMeter, type MeterSnapshot } from './debug-meter';
 import {
@@ -84,6 +84,8 @@ class AudioSonar {
   private readonly snapshot: MeterSnapshot;
 
   private status: Status | null = null;
+  /** Gestures only open the mic after startAudio() (the start screen's click). */
+  private armed = false;
   private calibrated = false;
   private disposed = false;
   private unsubscribeUpdate: (() => void) | null = null;
@@ -214,8 +216,14 @@ class AudioSonar {
 
   // --- mic lifecycle ---------------------------------------------------------------------
 
+  /** Called by startAudio() inside the start screen's click. */
+  arm(): void {
+    this.armed = true;
+    this.onGesture();
+  }
+
   private readonly onGesture = (): void => {
-    if (this.disposed) return;
+    if (this.disposed || !this.armed) return;
     // Must run synchronously inside the gesture so the browser lets the AudioContext start.
     this.mic.resumeContext();
     if (this.status === 'waiting') void this.enableMic();
@@ -325,6 +333,15 @@ export async function initAudioSonar(world: SonarWorld): Promise<void> {
   if (instance) return;
   instance = new AudioSonar(world);
   instance.start();
+}
+
+/**
+ * Start the audio engine (soundscape + mic). Call inside a user gesture: the start screen's
+ * "Click to begin" (browser autoplay rule). Safe to call again (e.g. after the browser suspended it).
+ */
+export function startAudio(): void {
+  startSoundscape();
+  instance?.arm();
 }
 
 /** Entry point used by src/main.ts. */

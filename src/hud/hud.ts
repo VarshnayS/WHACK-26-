@@ -9,6 +9,8 @@
 
 import { initStunVignette } from './stunVignette';
 import { initCaneIndicator } from './caneIndicator';
+import { initStartScreen } from './startScreen';
+import { world } from '../world';
 
 let tileAttributionEl: HTMLElement | null = null;
 
@@ -19,9 +21,12 @@ export function initHud(): void {
 
   initStunVignette(root);
   initCaneIndicator(root);
+  initStartScreen(root);
+  initVisionLabel(root);
 
   const attribution = document.createElement('div');
-  attribution.style.cssText = 'position:absolute;right:8px;bottom:8px;text-align:right;';
+  // above the start screen too: attribution must always stay visible
+  attribution.style.cssText = 'position:absolute;right:8px;bottom:8px;text-align:right;z-index:31;';
 
   // TODO(C): show the official Google Maps logo here as well.
   tileAttributionEl = document.createElement('div');
@@ -33,6 +38,20 @@ export function initHud(): void {
   root.appendChild(attribution);
 
   // TODO(C): FPS counter.
+}
+
+/** Current vision mode in the top-right corner (O to change). */
+function initVisionLabel(root: HTMLElement): void {
+  const el = document.createElement('div');
+  el.style.cssText = 'position:absolute;right:8px;top:8px;opacity:0.8;font-size:12px;';
+  root.appendChild(el);
+  let shown = '';
+  world.onUpdate(() => {
+    const label = world.vision.label;
+    if (label === shown) return;
+    shown = label;
+    el.textContent = `Vision: ${label}  (O)`;
+  });
 }
 
 /** Called by src/world/tiles.ts with the tiles' current copyright text. */

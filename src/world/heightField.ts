@@ -28,8 +28,15 @@ import { getTiles } from './tiles';
 export const GROUND_CELL = 2;
 /** The grid extends this far beyond the walls so clamped agents never sample outside it. */
 const GRID_PAD = 2;
-/** CPU time per frame spent probing nodes while a grid is being built (ms). */
+/** CPU time per frame spent probing nodes while a grid is being built (ms), during play. */
 const BUILD_BUDGET_MS = 3;
+/** Current per-frame budget: the start screen raises it while nobody is playing (setGroundBuildBudget). */
+let buildBudgetMs = BUILD_BUDGET_MS;
+
+/** Per-frame probing budget in ms; pass nothing to restore the in-game default. */
+export function setGroundBuildBudget(ms: number = BUILD_BUDGET_MS): void {
+  buildBudgetMs = Math.max(1, ms);
+}
 /** Wait this long after the last tiles-load-end before (re)building, so loading has settled (ms). */
 const SETTLE_MS = 1500;
 
@@ -187,6 +194,17 @@ export function isGroundReady(): boolean {
   return current !== null;
 }
 
+/**
+ * For the loading screen: `settled` = a grid exists, no rebuild is pending or running (so it was built
+ * from the tiles as they are now). `progress` 0..1 of the build in progress (1 when settled).
+ */
+export function groundStatus(): { ready: boolean; settled: boolean; progress: number; pending: boolean } {
+  const ready = current !== null;
+  const pending = dirtyAt >= 0;
+  const progress = building ? building.done / building.total : ready ? 1 : 0;
+  return { ready, settled: ready && !pending && !building, progress, pending };
+}
+
 /** Number of ground-grid builds finished so far (agents re-snap when this changes). */
 let generation = 0;
 export function groundGeneration(): number {
@@ -197,6 +215,7 @@ export function groundGeneration(): number {
 export function rebuildGroundField(): void {
   building = new HeightGridBuilder(tileProbe);
   buildStarted = performance.now();
+  performance.mark('ground:build-start');
 }
 
 /**
@@ -222,9 +241,10 @@ export function initGroundField(): void {
       rebuildGroundField();
     }
     if (!building) return;
-    if (building.step(BUILD_BUDGET_MS)) {
+    if (building.step(buildBudgetMs)) {
       current = building.grid;
       generation++;
+      performance.mark('ground:ready');
       console.info(
         `[ground] height grid ready: ${current.nAlong}x${current.nAcross} nodes every ${GROUND_CELL} m, ` +
           `${building.holes} without ground, ${(performance.now() - buildStarted).toFixed(0)} ms`,

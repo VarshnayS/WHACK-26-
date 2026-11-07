@@ -1,7 +1,8 @@
 /**
  * src/audio/soundscape.ts: immersive spatial audio (Web Audio, HRTF), purely audio, no pings
- * Owner: SENSES. Started from initMic() in ./index.ts; the AudioContext starts on the first
- * click / key press (browser autoplay rule).
+ * Owner: SENSES. Installed from initMic() in ./index.ts; the AudioContext is created by
+ * startSoundscape(), which the start screen calls inside its "Click to begin" handler (browser
+ * autoplay rule). Later gestures only resume it if the browser suspended it.
  *
  * The AudioListener follows the camera position and orientation every frame. Sources:
  *   - CARS: procedural engine (detuned saws + sub, low-passed, rough AM) + tyre/road noise; pitch and
@@ -427,9 +428,14 @@ class Soundscape {
   // --- start-up (inside the first user gesture) --------------------------------------------------
 
   private readonly onGesture = (): void => {
-    if (!this.ctx) this.start();
-    else if (this.ctx.state === 'suspended') void this.ctx.resume().catch(() => undefined);
+    if (this.ctx?.state === 'suspended') void this.ctx.resume().catch(() => undefined);
   };
+
+  /** Create / resume the AudioContext. Call inside a user gesture. */
+  begin(): void {
+    if (!this.ctx) this.start();
+    else this.onGesture();
+  }
 
   private start(): void {
     const Ctor = window.AudioContext;
@@ -852,6 +858,11 @@ export function initSoundscape(world: World): void {
   if (instance) return;
   instance = new Soundscape(world);
   instance.install();
+}
+
+/** Start the audio engine. Must be called inside a user gesture (the start screen's click). */
+export function startSoundscape(): void {
+  instance?.begin();
 }
 
 /** Debug: how many voices are live right now, or null before init. */

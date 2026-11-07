@@ -306,7 +306,10 @@ export function initTiles(): void {
     t.group.updateWorldMatrix(true, false);
     trimToCorridor(scene, t.group.matrixWorld);
     applySonarMaterial(scene);
-    if (firstLoadTime < 0) firstLoadTime = performance.now();
+    if (firstLoadTime < 0) {
+      firstLoadTime = performance.now();
+      performance.mark('tiles:first-model');
+    }
   });
 
   t.addEventListener('tile-visibility-change', ({ tile, visible }) => {
@@ -342,9 +345,16 @@ export function getTiles(): TilesRenderer | null {
 }
 
 /** Small summary for the debug readout. */
-export function getTileStats(): { visible: number; loading: boolean; trianglesKept: number; trianglesTrimmed: number } {
+export function getTileStats(): {
+  visible: number;
+  loading: boolean;
+  /** 0..1 (3d-tiles-renderer loadProgress); 0 before the renderer exists. */
+  progress: number;
+  trianglesKept: number;
+  trianglesTrimmed: number;
+} {
   const trim = { trianglesKept: trimStats.kept, trianglesTrimmed: trimStats.removed };
-  if (!tiles) return { visible: 0, loading: false, ...trim };
-  const loading = (tiles as unknown as { loadProgress?: number }).loadProgress;
-  return { visible: tiles.visibleTiles.size, loading: loading !== undefined && loading < 1, ...trim };
+  if (!tiles) return { visible: 0, loading: false, progress: 0, ...trim };
+  const progress = (tiles as unknown as { loadProgress?: number }).loadProgress ?? 0;
+  return { visible: tiles.visibleTiles.size, loading: progress < 1, progress, ...trim };
 }

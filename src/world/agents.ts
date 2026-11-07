@@ -969,6 +969,7 @@ export async function initAgents(): Promise<void> {
   initGroundField(); // agents stand on the precomputed height grid (needs initTiles() to have run)
 
   const osm = await loadOsm();
+  performance.mark('agents:osm-loaded');
   pedestrianGraph = buildPathGraph(osm, 'footway', { highways: PEDESTRIAN_HIGHWAYS });
   carGraph = buildPathGraph(osm, 'road', { highways: CAR_HIGHWAYS });
 
@@ -1004,6 +1005,7 @@ export async function initAgents(): Promise<void> {
   }
 
   world.onUpdate(updateAgents);
+  performance.mark('agents:ready');
 }
 
 // --- debug / tests -----------------------------------------------------------------------------
