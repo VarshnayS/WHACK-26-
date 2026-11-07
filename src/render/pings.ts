@@ -15,6 +15,7 @@ import { world } from '../world';
 import { WAVE_SPEED } from '../config';
 import { PING_UNUSED, sonarUniforms } from './sonarMaterial';
 import { getDevPings, initDevPings } from './devPings';
+import { pingColor } from './pingColors';
 
 /** Thinnest ring drawn, in metres (keeps the shader's smoothstep well defined). */
 const MIN_THICKNESS = 0.05;
@@ -53,6 +54,9 @@ function writePing(p: ActivePing, i: number, t: number): boolean {
   const u = sonarUniforms;
   u.uPingA.value[i].set(p.origin.x, p.origin.y, p.origin.z, radius);
   u.uPingB.value[i].set(p.range, Math.max(thickness, MIN_THICKNESS), Math.min(brightness, 1), fadePerMetre);
+  const c = pingColor(p.type, p.style);
+  if (c) u.uPingC.value[i].set(c[0], c[1], c[2], 1);
+  else u.uPingC.value[i].set(1, 1, 1, 0);
   // legacy layout for src/world/agentMaterial.ts: a start time that gives the same radius at WAVE_SPEED
   u.uPingOrigin.value[i].copy(p.origin);
   u.uPingStart.value[i] = t - radius / WAVE_SPEED;
