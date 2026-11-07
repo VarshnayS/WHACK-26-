@@ -4,6 +4,13 @@
  */
 import type { PingType } from '../shared/contracts';
 
+// --- spawn -----------------------------------------------------------------------------------------
+
+/** It spawns at a random spot inside the play area, at least SPAWN_MIN_DIST from the player
+ * (preferably no further than SPAWN_MAX_DIST). The corridor is 200 x 80 m. */
+export const SPAWN_MIN_DIST = 50;
+export const SPAWN_MAX_DIST = 90;
+
 // --- movement --------------------------------------------------------------------------------------
 
 /**
@@ -12,11 +19,11 @@ import type { PingType } from '../shared/contracts';
  */
 export const OMNISCIENT = true;
 /** OMNISCIENT: stalking speed at the start, how fast it ramps up (m/s per second hunting), and the cap. */
-export const STALK_SPEED = 1.4;
-export const STALK_RAMP = 0.015;
-export const STALK_MAX_SPEED = 3.0;
+export const STALK_SPEED = 1.0;
+export const STALK_RAMP = 0.008;
+export const STALK_MAX_SPEED = 2.0;
 /** OMNISCIENT: speed for BOOST_TIME after it hears a player sound (player run cap is 5.5). */
-export const CHASE_BOOST_SPEED = 3.5;
+export const CHASE_BOOST_SPEED = 2.6;
 export const BOOST_TIME = 5;
 /** OMNISCIENT: how often it re-plans the shortest route to the player. */
 export const REPLAN_INTERVAL = 0.5;
