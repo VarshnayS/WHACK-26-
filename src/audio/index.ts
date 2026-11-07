@@ -7,18 +7,15 @@
  * Keys:  SPACE  medium transient pulse (works without a mic)
  *        ⇧SPACE max-strength pulse
  *        ⇧C     recalibrate the noise floor (plain C holds the cane: src/senses/cane.ts)
- *        M      mute / unmute the mic
+ *        ⇧M     mute / unmute the mic (plain M is reserved for AUDIT's architect report)
  *        `      toggle the debug meter
  *        [ ]    sensitivity down / up      - =  trigger level down / up      0  reset (./tuning.ts)
  *        U      mute the soundscape        , .  volume down / up (./soundscape.ts)
  */
 import * as THREE from 'three';
 import { world as sharedWorld } from '../world';
-import { EYE_HEIGHT } from '../config';
-import { emitNoise, emitPulse, getActivePulses, pulseNow } from '../sonar/pulses';
 import type { PingType } from '../shared/contracts';
-import { initSoundscape } from './soundscape';
-import { createDebugRings, type DebugRings } from '../sonar/debug-rings';
+import { initSoundscape, startSoundscape } from './soundscape';
 import { Calibrator } from './calibration';
 import { DebugMeter, type MeterSnapshot } from './debug-meter';
 import {
@@ -34,16 +31,6 @@ import { HudMessage } from './hud-message';
 import { MicInput } from './mic';
 import { describeTuning, handleTuningKey, loadTuning } from './tuning';
 
-export {
-  emitPulse,
-  onPulse,
-  getActivePulses,
-  onNoise,
-  emitNoise,
-  pulseNow,
-  MAX_ACTIVE_PULSES,
-} from '../sonar/pulses';
-export type { Pulse, PulseSource, PulseKind, ActivePulse, NoiseEvent } from '../sonar/pulses';
 export { DETECTOR_CONFIG } from './detector';
 
 /** The slice of `world` (src/world/index.ts) this module needs. */
@@ -53,6 +40,8 @@ export interface SonarWorld {
   onUpdate(fn: (dt: number) => void): () => void;
   /** The contract's ping (src/shared/contracts.ts): the only thing the sonar shader draws. */
   ping(origin: THREE.Vector3, range: number, type?: PingType): void;
+  /** Live pings (debug meter count). */
+  readonly pings: readonly unknown[];
 }
 
 type Status =
@@ -73,7 +62,7 @@ const STATUS_HUD: Record<Status, { text: string; hideAfterMs?: number; warn?: bo
   requesting: { text: 'Allow microphone access to use your voice as sonar' },
   calibrating: { text: 'Stay quiet… calibrating mic' },
   listening: { text: 'Mic sonar ready: clap, click or shout', hideAfterMs: 2500 },
-  muted: { text: 'Mic muted (M to unmute).' + FALLBACK },
+  muted: { text: 'Mic muted (Shift+M to unmute).' + FALLBACK },
   denied: { text: 'Mic blocked: allow it in site settings and reload.' + FALLBACK, hideAfterMs: 8000, warn: true },
   'no-device': { text: 'No microphone found.' + FALLBACK, hideAfterMs: 8000, warn: true },
   unsupported: { text: 'Mic needs localhost or HTTPS.' + FALLBACK, hideAfterMs: 8000, warn: true },
@@ -92,10 +81,11 @@ class AudioSonar {
   private readonly keyEvent = createDetectionEvent();
   private readonly hud: HudMessage;
   private readonly meter: DebugMeter;
-  private readonly rings: DebugRings | null;
   private readonly snapshot: MeterSnapshot;
 
   private status: Status | null = null;
+  /** Gestures only open the mic after startAudio() (the start screen's click). */
+  private armed = false;
   private calibrated = false;
   private disposed = false;
   private unsubscribeUpdate: (() => void) | null = null;
@@ -108,7 +98,6 @@ class AudioSonar {
     const hudRoot = document.getElementById('hud') ?? document.body;
     this.hud = new HudMessage(hudRoot);
     this.meter = new DebugMeter(hudRoot);
-    this.rings = this.cfg.debugRings ? createDebugRings(world.scene, EYE_HEIGHT) : null;
     this.features.rmsDb = this.cfg.minDb;
     this.snapshot = {
       nowMs: 0,
@@ -149,7 +138,6 @@ class AudioSonar {
     this.unsubscribeUpdate?.();
     this.unsubscribeUpdate = null;
     this.mic.dispose();
-    this.rings?.dispose();
     this.meter.dispose();
     this.hud.dispose();
   }
@@ -176,7 +164,6 @@ class AudioSonar {
     }
 
     const now = nowMs / 1000;
-    this.rings?.update(now);
     if (this.meter.visible) this.drawMeter(nowMs, now);
   };
 
@@ -198,7 +185,7 @@ class AudioSonar {
     s.autoRange = this.cfg.autoRange;
     s.calibrating = this.calibrator.active();
     s.calibrationProgress = this.calibrator.progress(nowMs);
-    s.activePulses = getActivePulses(now).length;
+    s.activePulses = this.world.pings.length;
     this.meter.draw(s);
   }
 
@@ -206,20 +193,8 @@ class AudioSonar {
 
   private firePlayerPulse(e: DetectionEvent): void {
     this.world.camera.getWorldPosition(this.playerPos);
-    // The shader only draws world.activePings(), so this is what makes the voice visible.
-    // (Before: the mic only fed the legacy src/sonar/pulses.ts bus, which nothing renders.)
+    // The shader only draws world.activePings(); the entity hears the same pings.
     this.world.ping(this.playerPos, e.maxRadius, 'voice');
-    // Legacy bus, kept for onPulse() subscribers and the optional debug rings.
-    emitPulse({
-      origin: this.playerPos, // the bus copies it
-      speed: e.speed,
-      maxRadius: e.maxRadius,
-      strength: e.strength,
-      brightness: e.brightness,
-      kind: e.kind,
-      source: 'player',
-    });
-    emitNoise(this.playerPos, e.strength, e.timeMs / 1000);
     Object.assign(this.snapshot.lastEvent, e);
     this.snapshot.eventSerial++;
   }
@@ -229,7 +204,7 @@ class AudioSonar {
     const strength = max ? 1 : this.cfg.keyboardStrength;
     e.kind = 'transient';
     e.repeat = false;
-    e.timeMs = pulseNow() * 1000;
+    e.timeMs = performance.now();
     e.levelDb = 0;
     e.aboveFloorDb = 0;
     e.strength = strength;
@@ -241,8 +216,14 @@ class AudioSonar {
 
   // --- mic lifecycle ---------------------------------------------------------------------
 
+  /** Called by startAudio() inside the start screen's click. */
+  arm(): void {
+    this.armed = true;
+    this.onGesture();
+  }
+
   private readonly onGesture = (): void => {
-    if (this.disposed) return;
+    if (this.disposed || !this.armed) return;
     // Must run synchronously inside the gesture so the browser lets the AudioContext start.
     this.mic.resumeContext();
     if (this.status === 'waiting') void this.enableMic();
@@ -266,7 +247,7 @@ class AudioSonar {
       return;
     }
     if (this.mic.isMuted) {
-      this.hud.show('Unmute (M) before calibrating', 2000);
+      this.hud.show('Unmute (Shift+M) before calibrating', 2000);
       return;
     }
     this.detector.reset();
@@ -332,7 +313,7 @@ class AudioSonar {
         if (e.shiftKey) this.beginCalibration(); // plain C = cane (src/senses/cane.ts)
         break;
       case 'KeyM':
-        this.toggleMute();
+        if (e.shiftKey) this.toggleMute(); // plain M = AUDIT's architect report
         break;
       default: {
         const msg = handleTuningKey(e.code, this.cfg);
@@ -354,13 +335,22 @@ export async function initAudioSonar(world: SonarWorld): Promise<void> {
   instance.start();
 }
 
+/**
+ * Start the audio engine (soundscape + mic). Call inside a user gesture: the start screen's
+ * "Click to begin" (browser autoplay rule). Safe to call again (e.g. after the browser suspended it).
+ */
+export function startAudio(): void {
+  startSoundscape();
+  instance?.arm();
+}
+
 /** Entry point used by src/main.ts. */
 export function initMic(): Promise<void> {
   initSoundscape(sharedWorld);
   return initAudioSonar(sharedWorld);
 }
 
-/** Stop the mic tracks, close the AudioContext, remove listeners, overlay and debug rings. */
+/** Stop the mic tracks, close the AudioContext, remove listeners and the overlay. */
 export function dispose(): void {
   instance?.dispose();
   instance = null;

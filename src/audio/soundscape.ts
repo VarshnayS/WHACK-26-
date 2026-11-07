@@ -1,13 +1,15 @@
 /**
  * src/audio/soundscape.ts: immersive spatial audio (Web Audio, HRTF), purely audio, no pings
- * Owner: SENSES. Started from initMic() in ./index.ts; the AudioContext starts on the first
- * click / key press (browser autoplay rule).
+ * Owner: SENSES. Installed from initMic() in ./index.ts; the AudioContext is created by
+ * startSoundscape(), which the start screen calls inside its "Click to begin" handler (browser
+ * autoplay rule). Later gestures only resume it if the browser suspended it.
  *
  * The AudioListener follows the camera position and orientation every frame. Sources:
  *   - CARS: procedural engine (detuned saws + sub, low-passed, rough AM) + tyre/road noise; pitch and
  *     level follow speed, with an (exaggerated) Doppler shift as they pass. Nearest MAX_CAR_VOICES.
- *   - PEDESTRIANS: soft footstep taps synced to their walk cycle (each 'pedestrian' ping that
- *     agents.ts fires on a step plays one), and murmured conversation in groups: a voiced source through
+ *   - PEDESTRIANS: soft footstep taps synced to their walk cycle (onPedestrianStep from
+ *     src/world/soundSources.ts, at the step itself; the faint ping follows 0.3–0.5 s later like an
+ *     echo), and murmured conversation in groups: a voiced source through
  *     moving formant filters with syllable envelopes; group members take turns.
  *   - PLAYER: own footsteps / idle shuffle (from the 'footstep' pings of src/senses/footsteps.ts),
  *     cane taps (from 'cane' pings), a heavy thud + ear ringing on world 'stunned'.
@@ -26,6 +28,7 @@ import type { StunnedPayload } from '../player/controller';
 import * as C from './soundscapeConfig';
 import type { SfxName } from './soundscapeConfig';
 import { brownNoise, renderOneShots, whiteNoise } from './synth';
+import { onPedestrianStep } from '../world/soundSources';
 
 // --- small helpers ------------------------------------------------------------------------------
 
@@ -382,6 +385,7 @@ class Soundscape {
   private entityNextStep = 0;
   private entityLimp = 1;
   private readonly chatty = new WeakMap<Agent, boolean>();
+  private offStep: (() => void) | null = null;
 
   private readonly listenerPos = new THREE.Vector3();
   private readonly lastListenerPos = new THREE.Vector3();
@@ -407,6 +411,7 @@ class Soundscape {
     window.addEventListener('keydown', this.onKeyDown);
     this.world.on('stunned', this.onStunned);
     this.world.onUpdate(this.update);
+    this.offStep = onPedestrianStep(this.onPedStep);
   }
 
   dispose(): void {
@@ -414,6 +419,7 @@ class Soundscape {
     window.removeEventListener('keydown', this.onGesture, true);
     window.removeEventListener('keydown', this.onKeyDown);
     this.world.off('stunned', this.onStunned);
+    this.offStep?.();
     this.msgEl?.remove();
     void this.ctx?.close().catch(() => undefined);
     this.ctx = null;
@@ -422,9 +428,14 @@ class Soundscape {
   // --- start-up (inside the first user gesture) --------------------------------------------------
 
   private readonly onGesture = (): void => {
-    if (!this.ctx) this.start();
-    else if (this.ctx.state === 'suspended') void this.ctx.resume().catch(() => undefined);
+    if (this.ctx?.state === 'suspended') void this.ctx.resume().catch(() => undefined);
   };
+
+  /** Create / resume the AudioContext. Call inside a user gesture. */
+  begin(): void {
+    if (!this.ctx) this.start();
+    else this.onGesture();
+  }
 
   private start(): void {
     const Ctor = window.AudioContext;
@@ -648,13 +659,17 @@ class Soundscape {
         this.playAt('cane', p.origin, C.CANE_GAIN * lerp(1, 2.2, hard));
         return;
       }
-      case 'pedestrian':
-        if (d <= C.PED_STEP_RADIUS) this.playAt('pedStep', p.origin, C.PED_STEP_GAIN * clamp(p.range / 3.5, 0.5, 1));
-        return;
       default:
         return;
     }
   }
+
+  /** A pedestrian put a foot down (heard at once; its ping comes later). */
+  private readonly onPedStep = (agent: Agent, speed: number): void => {
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    if (agent.position.distanceToSquared(this.listenerPos) > C.PED_STEP_RADIUS * C.PED_STEP_RADIUS) return;
+    this.playAt('pedStep', agent.position, C.PED_STEP_GAIN * clamp(speed / 1.6, 0.5, 1));
+  };
 
   private assignCars(): void {
     const lp = this.listenerPos;
@@ -843,6 +858,11 @@ export function initSoundscape(world: World): void {
   if (instance) return;
   instance = new Soundscape(world);
   instance.install();
+}
+
+/** Start the audio engine. Must be called inside a user gesture (the start screen's click). */
+export function startSoundscape(): void {
+  instance?.begin();
 }
 
 /** Debug: how many voices are live right now, or null before init. */

@@ -10,36 +10,18 @@
  * tested before SOUND's pings land. Never in production builds.
  */
 import type * as THREE from 'three';
-import { MAX_PINGS, type ActivePing } from '../shared/contracts';
+import { MAX_PINGS, type ActivePing, type VisionMode } from '../shared/contracts';
 import { world } from '../world';
-import { WAVE_SPEED } from '../config';
-import { PING_UNUSED, sonarUniforms } from './sonarMaterial';
+import { sonarUniforms } from './sonarMaterial';
 import { getDevPings, initDevPings } from './devPings';
-import { pingColor } from './pingColors';
+import { pingColor, pingTrailLevel } from './pingColors';
+
+const WHITE = [1, 1, 1] as const;
 
 /** Thinnest ring drawn, in metres (keeps the shader's smoothstep well defined). */
 const MIN_THICKNESS = 0.05;
 /** A ping whose whole range was passed this many fade time-constants ago is invisible: skip it. */
 const FADED_AFTER = 6;
-
-/**
- * @deprecated Shape of the old ping list (still imported by src/world/index.ts). Use ActivePing
- * from src/shared/contracts.ts.
- */
-export interface Ping {
-  origin: THREE.Vector3;
-  range: number;
-  start: number;
-}
-
-/**
- * @deprecated No-op. Ping storage now lives in SOUND's world.ping(); this stays only so
- * src/world/index.ts compiles until SOUND rewires it.
- */
-export function addPing(origin: THREE.Vector3, range: number): void {
-  void origin;
-  void range;
-}
 
 /** Write one ping into slot `i`. Returns false if the ping isn't visible (slot stays free). */
 function writePing(p: ActivePing, i: number, t: number): boolean {
@@ -54,13 +36,8 @@ function writePing(p: ActivePing, i: number, t: number): boolean {
   const u = sonarUniforms;
   u.uPingA.value[i].set(p.origin.x, p.origin.y, p.origin.z, radius);
   u.uPingB.value[i].set(p.range, Math.max(thickness, MIN_THICKNESS), Math.min(brightness, 1), fadePerMetre);
-  const c = pingColor(p.type, p.style);
-  if (c) u.uPingC.value[i].set(c[0], c[1], c[2], 1);
-  else u.uPingC.value[i].set(1, 1, 1, 0);
-  // legacy layout for src/world/agentMaterial.ts: a start time that gives the same radius at WAVE_SPEED
-  u.uPingOrigin.value[i].copy(p.origin);
-  u.uPingStart.value[i] = t - radius / WAVE_SPEED;
-  u.uPingRange.value[i] = p.range;
+  const c = pingColor(p.type, p.style) ?? WHITE;
+  u.uPingC.value[i].set(c[0], c[1], c[2], pingTrailLevel(p.type));
   return true;
 }
 
@@ -69,12 +46,26 @@ function writeAll(list: readonly ActivePing[], n: number, t: number): number {
   return n;
 }
 
-/** Called once per frame by src/main.ts: time, player position and active pings -> uniforms. */
+const DEG = Math.PI / 180;
+
+/** world.vision (+ render-side acuity) and the gaze -> vision uniforms. */
+function updateVision(): void {
+  const u = sonarUniforms;
+  const v = world.vision as VisionMode & { acuity?: number };
+  u.uVisDist.value = Math.max(0, v.visibleDistance);
+  u.uVisOuter.value = Math.max(0, Math.min(v.peripheralLimitDeg, v.fovDeg / 2)) * DEG;
+  u.uVisInner.value = Math.max(0, v.centralLossDeg / 2) * DEG;
+  u.uVisAcuity.value = Math.min(1, Math.max(0, v.acuity ?? 1));
+  world.camera.getWorldDirection(u.uViewDir.value);
+}
+
+/** Called once per frame by src/main.ts: time, player position, vision and active pings -> uniforms. */
 export function updatePings(playerPos: THREE.Vector3): void {
   const t = now();
   const u = sonarUniforms;
   u.uTime.value = t;
   u.uPlayerPos.value.copy(playerPos);
+  updateVision();
 
   let n = writeAll(world.activePings(), 0, t);
   if (import.meta.env.DEV) {
@@ -82,7 +73,6 @@ export function updatePings(playerPos: THREE.Vector3): void {
     n = writeAll(getDevPings(t), n, t);
   }
   u.uPingCount.value = n;
-  for (let i = n; i < MAX_PINGS; i++) u.uPingStart.value[i] = PING_UNUSED;
 }
 
 /** Currently active pings (same as world.activePings()). */

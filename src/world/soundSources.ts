@@ -3,15 +3,18 @@
  * Owner: SOUND (feat/sound-sources). initSoundSources() is called once from src/main.ts.
  *
  *  - Cars: periodic 'car' pings; interval and range scale with speed (~15 m at full speed).
- *  - Pedestrians: faint 'pedestrian' pings on each footstep of their walk cycle (agents.ts calls
- *    pedestrianFootstep() from the walk cycle).
- *  - Only agents within AGENT_SOUND_RADIUS of the player make pings.
+ *  - Pedestrians: agents.ts calls pedestrianFootstep() on each footstep of the walk cycle. Listeners
+ *    (onPedestrianStep: the soundscape) hear the step at once; pedestrians within PED_PING_RADIUS
+ *    (src/config.ts) also make a faint 'pedestrian' ping 0.3–0.5 s later, like an echo.
+ *  - Only cars within AGENT_SOUND_RADIUS of the player make pings; their range is capped at
+ *    CAR_PING_RANGE_MAX.
  *  - Player vs agent collisions (agents.ts calls playerAgentCollision()): an audit record plus an
  *    'impact' ping.
  * Tuning: src/world/soundConfig.ts. Pings are pooled and ranked in src/world/pings.ts.
  */
 import * as THREE from 'three';
 import type { Agent, World } from './index';
+import { CAR_PING_RANGE_MAX, PED_PING_ECHO_DELAY_MAX, PED_PING_ECHO_DELAY_MIN } from '../config';
 import {
   AGENT_SOUND_RADIUS,
   CAR_ENGINE_HEIGHT,
@@ -23,6 +26,7 @@ import {
   IMPACT_RANGE_BASE,
   IMPACT_RANGE_MAX,
   IMPACT_RANGE_PER_MPS,
+  PEDESTRIAN_PING_RADIUS,
   PEDESTRIAN_STEP_FULL_SPEED,
   PEDESTRIAN_STEP_MIN_SPEED,
   PEDESTRIAN_STEP_RANGE_MAX,
@@ -34,6 +38,37 @@ let world: World | null = null;
 const nextEngine = new WeakMap<Agent, number>();
 const tmp = new THREE.Vector3();
 const RADIUS_SQ = AGENT_SOUND_RADIUS * AGENT_SOUND_RADIUS;
+const PED_RADIUS_SQ = PEDESTRIAN_PING_RADIUS * PEDESTRIAN_PING_RADIUS;
+
+/** Pedestrian echo pings waiting to fire (fixed pool, no allocation per step). */
+interface PendingPing {
+  used: boolean;
+  at: number;
+  origin: THREE.Vector3;
+  range: number;
+}
+const pending: PendingPing[] = Array.from({ length: 24 }, () => ({ used: false, at: 0, origin: new THREE.Vector3(), range: 0 }));
+
+/** Called on every pedestrian footstep, at the moment of the step (before its delayed ping). */
+export type PedestrianStepListener = (agent: Agent, speed: number) => void;
+const stepListeners = new Set<PedestrianStepListener>();
+
+/** Hear every pedestrian footstep as it happens (the soundscape plays the step sound). Returns unsubscribe. */
+export function onPedestrianStep(cb: PedestrianStepListener): () => void {
+  stepListeners.add(cb);
+  return () => stepListeners.delete(cb);
+}
+
+function firePending(): void {
+  const w = world;
+  if (!w) return;
+  const now = performance.now() / 1000;
+  for (const p of pending) {
+    if (!p.used || now < p.at) continue;
+    p.used = false;
+    w.ping(p.origin, p.range, 'pedestrian');
+  }
+}
 
 function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x;
@@ -64,7 +99,7 @@ function updateEngines(): void {
     if (now < next) continue;
     tmp.copy(a.position);
     tmp.y += CAR_ENGINE_HEIGHT;
-    w.ping(tmp, lerp(CAR_RANGE_IDLE, CAR_RANGE_FULL, s), 'car');
+    w.ping(tmp, Math.min(CAR_PING_RANGE_MAX, lerp(CAR_RANGE_IDLE, CAR_RANGE_FULL, s)), 'car');
     nextEngine.set(a, now + interval);
   }
 }
@@ -72,9 +107,16 @@ function updateEngines(): void {
 /** Called by agents.ts on every footstep of a walking pedestrian (twice per gait cycle). */
 export function pedestrianFootstep(agent: Agent, speed: number): void {
   const w = world;
-  if (!w || speed < PEDESTRIAN_STEP_MIN_SPEED || !nearPlayer(w, agent.position)) return;
+  if (!w || speed < PEDESTRIAN_STEP_MIN_SPEED) return;
+  for (const cb of stepListeners) cb(agent, speed);
+  if (agent.position.distanceToSquared(w.camera.position) > PED_RADIUS_SQ) return;
+  const slot = pending.find((p) => !p.used);
+  if (!slot) return; // more than 24 steps in flight: skip this echo
   const t = clamp01((speed - PEDESTRIAN_STEP_MIN_SPEED) / (PEDESTRIAN_STEP_FULL_SPEED - PEDESTRIAN_STEP_MIN_SPEED));
-  w.ping(agent.position, lerp(PEDESTRIAN_STEP_RANGE_MIN, PEDESTRIAN_STEP_RANGE_MAX, t), 'pedestrian');
+  slot.used = true;
+  slot.at = performance.now() / 1000 + lerp(PED_PING_ECHO_DELAY_MIN, PED_PING_ECHO_DELAY_MAX, Math.random());
+  slot.origin.copy(agent.position);
+  slot.range = lerp(PEDESTRIAN_STEP_RANGE_MIN, PEDESTRIAN_STEP_RANGE_MAX, t);
 }
 
 /**
@@ -99,4 +141,5 @@ export function initSoundSources(w: World): void {
   if (world) return;
   world = w;
   w.onUpdate(updateEngines);
+  w.onUpdate(firePending);
 }
