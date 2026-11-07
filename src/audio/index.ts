@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import { world as sharedWorld } from '../world';
 import { EYE_HEIGHT } from '../config';
 import { emitNoise, emitPulse, getActivePulses, pulseNow } from '../sonar/pulses';
+import type { PingType } from '../shared/contracts';
 import { createDebugRings, type DebugRings } from '../sonar/debug-rings';
 import { Calibrator } from './calibration';
 import { DebugMeter, type MeterSnapshot } from './debug-meter';
@@ -48,6 +49,8 @@ export interface SonarWorld {
   readonly scene: THREE.Scene;
   readonly camera: THREE.Camera;
   onUpdate(fn: (dt: number) => void): () => void;
+  /** The contract's ping (src/shared/contracts.ts): the only thing the sonar shader draws. */
+  ping(origin: THREE.Vector3, range: number, type?: PingType): void;
 }
 
 type Status =
@@ -201,6 +204,10 @@ class AudioSonar {
 
   private firePlayerPulse(e: DetectionEvent): void {
     this.world.camera.getWorldPosition(this.playerPos);
+    // The shader only draws world.activePings(), so this is what makes the voice visible.
+    // (Before: the mic only fed the legacy src/sonar/pulses.ts bus, which nothing renders.)
+    this.world.ping(this.playerPos, e.maxRadius, 'voice');
+    // Legacy bus, kept for onPulse() subscribers and the optional debug rings.
     emitPulse({
       origin: this.playerPos, // the bus copies it
       speed: e.speed,

@@ -21,7 +21,7 @@ export type DetectionKind = 'transient' | 'sustained';
 /** Pulse size multiplier. 1 = normal, 1.5 = everything reaches further, 0.7 = smaller. */
 export const SENSITIVITY = 1.0;
 /** dB above the room's noise you must be to fire a pulse. Lower = triggers on quieter sounds. */
-export const TRIGGER_DB = 15;
+export const TRIGGER_DB = 12;
 /**
  * Learn how loud this mic gets in real time: the loudest recent sound = a full-size pulse.
  * Makes quiet / low-gain mics and noisy rooms feel as responsive as a good mic.
@@ -32,9 +32,12 @@ export const AUTO_RANGE = true;
 export const FIXED_RANGE_DB = 40;
 /** Response curve: < 1 makes quiet/medium sounds give bigger pulses, 1 = linear. */
 export const STRENGTH_CURVE = 0.7;
-/** Smallest / largest pulse reach in metres. */
-export const MIN_RADIUS_M = 10;
-export const MAX_RADIUS_M = 80;
+/**
+ * Smallest / largest pulse reach in metres: a whisper just over the trigger reveals ~3 m,
+ * a full shout ~40 m (the voice ping's range in world.ping).
+ */
+export const MIN_RADIUS_M = 3;
+export const MAX_RADIUS_M = 40;
 
 /** Every tunable for the audio -> sonar module lives here (README "Audio sonar"). */
 export interface DetectorConfig {
@@ -169,7 +172,7 @@ export const DETECTOR_CONFIG: DetectorConfig = {
   keyboardStrength: 0.5,
   keyboardBrightness: 0.5,
 
-  debugRings: true,
+  debugRings: false, // world.ping now drives the real shader
 };
 
 // ---------------------------------------------------------------------------------------------
