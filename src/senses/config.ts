@@ -23,3 +23,33 @@ export const STEP_PING_HEIGHT = 0.1;
 export const IDLE_PULSE_INTERVAL = 4;
 /** ...with this range (m), so you're never completely lost. */
 export const IDLE_PULSE_RANGE = 1.5;
+
+// --- cane (src/senses/cane.ts) -------------------------------------------------------------------
+
+/** Horizontal reach of the cane tip in front of the feet (m). */
+export const CANE_REACH = 1.2;
+/** Full sweep arc (degrees), centred on where the player faces. */
+export const CANE_ARC_DEG = 60;
+/** Sweep speed (degrees per second): one side to the other in ~0.6 s. */
+export const CANE_SWEEP_DEG_PER_S = 100;
+/** Hand position relative to the eye (m): right, down, forward. */
+export const CANE_HAND_RIGHT = 0.22;
+export const CANE_HAND_DOWN = 0.85;
+export const CANE_HAND_FORWARD = 0.2;
+/** Height (m) above the ground of the ray swept from the last tip to the new one. */
+export const CANE_SWEEP_RAY_HEIGHT = 0.12;
+/** Surfaces with a normal steeper than this (|n.y| < it) are obstacles; flatter ones are floor. */
+export const CANE_MAX_OBSTACLE_NORMAL_Y = 0.7;
+/** Ping range (m) of a contact tap / a hard tap (V). */
+export const CANE_TAP_RANGE = 1.5;
+export const CANE_HARD_TAP_RANGE = 4;
+/** Minimum time between two contact taps (s), so resting on a wall doesn't machine-gun pings. */
+export const CANE_TAP_COOLDOWN = 0.18;
+/** While the cane stays against something, it taps again this often (s). */
+export const CANE_CONTACT_REPEAT = 0.6;
+/** After bouncing off something to the side, the sweep can't reverse again for this long (s). */
+export const CANE_BOUNCE_LOCK = 0.12;
+/** Minimum time between hard taps (s). */
+export const CANE_HARD_TAP_COOLDOWN = 0.25;
+/** Line opacity (white, never coloured). */
+export const CANE_LINE_OPACITY = 0.9;
