@@ -13,6 +13,7 @@ import { initController } from './player/controller';
 import { initHud } from './hud/hud';
 import { initMic } from './audio'; // C: initAudioSonar(world)
 import { updatePings } from './render/pings';
+import { initAudit } from './world/audit/log';
 
 function setupRenderer(): void {
   const { renderer, camera } = world;
@@ -35,6 +36,7 @@ async function start(): Promise<void> {
   initTiles(); // A
   await initAgents(); // A
   initController(); // C
+  initAudit(world); // audit: world.audit + V report + J test events
   void initMic(); // C (waits for a user gesture itself)
 
   let last = performance.now();
