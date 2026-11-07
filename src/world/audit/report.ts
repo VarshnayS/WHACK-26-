@@ -26,6 +26,7 @@ import {
 import type { World } from '../index';
 import { getTiles } from '../tiles';
 import { isRevealAll, setRevealAll } from '../../render/sonarMaterial';
+import { captureTopDownMap, worldToMap, type TopDownView } from './topDownMap';
 import {
   clearEvents,
   getAllEvents,
@@ -69,19 +70,7 @@ interface Aggregate {
   runCount: number;
 }
 
-interface SnapshotView {
-  /** Centre of the ground-plane view in local world metres. */
-  centerX: number;
-  centerZ: number;
-  /** Camera-local screen-right and screen-up, projected into the world X/Z plane. */
-  rightX: number;
-  rightZ: number;
-  upX: number;
-  upZ: number;
-  /** Half-extents of the perspective frustum where it intersects the centre ground plane. */
-  halfWidth: number;
-  halfHeight: number;
-}
+type SnapshotView = TopDownView;
 
 interface DrawRect {
   x: number;
@@ -357,16 +346,14 @@ export function initReport(world: World): () => void {
   }
 
   /**
-   * Capture the currently loaded 3D scene once.
-   *
-   * All camera properties changed here are restored in finally, including the projection
-   * matrix. A single TilesRenderer update is requested at the temporary pose so its current
-   * visibility/LOD selection is aligned with the snapshot camera; tile downloads themselves
-   * remain asynchronous and are not waited on.
+   * Capture the currently loaded 3D scene once (src/world/audit/topDownMap.ts, shared with the
+   * start screen's route picker). The live camera is restored inside captureTopDownMap().
    */
   function captureSnapshot(): boolean {
-    if (!context || !snapshotContext) {
-      snapshotError = 'Could not create a 2D canvas context.';
+    fitCanvasToRenderer();
+    const map = captureTopDownMap(world, { paddingM: SNAPSHOT_PADDING_METRES, into: snapshotCanvas });
+    if (!map) {
+      snapshotError = 'Could not render the top-down view (see the console).';
       return false;
     }
     const source = world.renderer.domElement;
@@ -518,15 +505,8 @@ export function initReport(world: World): () => void {
     const ordered = data.cells.slice().sort((a, b) => a.total - b.total);
 
     for (const cell of ordered) {
-      const dx = cell.x - view.centerX;
-      const dz = cell.z - view.centerZ;
-
-      // Project local X/Z into the snapshot camera's screen-right / screen-up axes.
-      const screenX = dx * view.rightX + dz * view.rightZ;
-      const screenY = dx * view.upX + dz * view.upZ;
-
-      const nx = screenX / (view.halfWidth * 2) + 0.5;
-      const ny = 0.5 - screenY / (view.halfHeight * 2);
+      // Project local X/Z into the snapshot image (0..1).
+      const { u: nx, v: ny } = worldToMap(view, cell.x, cell.z);
 
       // Skip hotspots outside the captured world rectangle.
       if (nx < 0 || nx > 1 || ny < 0 || ny > 1) continue;

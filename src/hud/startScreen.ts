@@ -10,6 +10,9 @@
  * rule) and locks the pointer. If loading stalls (e.g. an offline cache miss), begin is allowed
  * anyway after BEGIN_ANYWAY_S.
  *
+ * ROUTE: a top-down map (src/hud/routePicker.ts, the audit report's snapshot) to place the start and
+ * goal; begin puts the player on the start facing the goal (src/player/route.ts).
+ *
  * O (in game): reopens the vision picker over the game; click Resume (or O again) to go back.
  *
  * Startup timing: performance marks from agents / tiles / ground plus long tasks are logged once as
@@ -23,6 +26,8 @@ import { groundStatus, setGroundLoading } from '../world/heightField';
 import { initVision } from '../senses/vision';
 import { createVisionPicker } from '../senses/visionPicker';
 import { settings, setEntityEnabledSetting } from '../game/settings';
+import { createRoutePicker, initGoalMessage } from './routePicker';
+import { applyRouteStart } from '../player/route';
 
 /** Everything must stay ready this long before "Click to begin" lights up (ms): tiles can restart loading. */
 const READY_HOLD_MS = 400;
@@ -165,6 +170,11 @@ export function initStartScreen(hud: HTMLElement): void {
   status.style.cssText = 'font-size:12px;opacity:0.7;min-height:1.4em;';
 
   const picker = createVisionPicker();
+  const route = createRoutePicker();
+  const pickers = document.createElement('div');
+  pickers.style.cssText = 'display:flex;flex-wrap:wrap;gap:24px;justify-content:center;align-items:flex-start;';
+  pickers.append(picker.el, route.el);
+  initGoalMessage(hud);
 
   // Main menu option: the entity that hunts the player.
   const settingsRow = document.createElement('label');
@@ -183,7 +193,7 @@ export function initStartScreen(hud: HTMLElement): void {
   begin.style.cssText =
     'font:inherit;font-size:16px;padding:10px 28px;background:#000;color:#fff;border:1px solid #fff;border-radius:4px;';
 
-  el.append(title, sub, controls, barWrap, status, settingsRow, picker.el, begin);
+  el.append(title, sub, controls, barWrap, status, settingsRow, pickers, begin);
   hud.appendChild(el);
   mode = 'start';
 
@@ -224,6 +234,9 @@ export function initStartScreen(hud: HTMLElement): void {
       setGroundLoading(false); // back to the in-game budget
       if (report.ready === null) finishReport(); // "begin anyway" path
       for (const fn of beginListeners) fn();
+      if (!route.hasMap()) route.capture();
+      applyRouteStart(); // onto the start point, facing the goal
+      route.el.style.display = 'none'; // the route is only chosen before the run
     } else {
       startAudio(); // resume if the browser suspended it
     }
@@ -234,9 +247,9 @@ export function initStartScreen(hud: HTMLElement): void {
     e.stopPropagation();
     onBegin();
   });
-  // a click anywhere on the screen (not on the picker) also begins / resumes
+  // a click anywhere on the screen (not on the pickers) also begins / resumes
   el.addEventListener('click', (e) => {
-    if (picker.el.contains(e.target as Node) || settingsRow.contains(e.target as Node)) return;
+    if (picker.el.contains(e.target as Node) || settingsRow.contains(e.target as Node) || route.el.contains(e.target as Node)) return;
     onBegin();
   });
 
@@ -302,6 +315,7 @@ export function initStartScreen(hud: HTMLElement): void {
       if (report.ready === null) {
         report.ready = now;
         finishReport();
+        route.capture(); // the street is loaded: draw it under the route picker
       }
       status.textContent = 'Ready';
       if (!canBegin || begin.textContent !== 'Click to begin') setBegin(true, 'Click to begin');
