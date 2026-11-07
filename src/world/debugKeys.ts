@@ -10,19 +10,24 @@
  * Space is a stand-in until the player controller / mic (owner C) fire pings. When C binds
  * Space in src/player/controller.ts, delete the Space handler here so it doesn't ping twice.
  *
- * The readout (top-left, only while R or F is on) shows the camera position, height and distance
- * from the origin, which helps while warming the tile cache. It's a separate element from the
- * HUD (owner C) and never covers the attribution.
+ * The readout (top-left, only while R or F is on) shows the camera position, where it is in the
+ * corridor and whether tiles are still loading, which helps while warming the tile cache, plus an
+ * FPS counter. While R is on, the corridor walls are drawn as a white outline. The readout is a
+ * separate element from the HUD (owner C) and never covers the attribution.
  */
 import { world } from './index';
 import { isRevealAll, onRevealAllChange, toggleRevealAll } from './debugMaterial';
 import { initDebugCamera, isDebugCameraActive, toggleDebugCamera } from './debugCamera';
 import { getGroundOffset, getTileStats } from './tiles';
-import { PLAY_RADIUS, TEST_PING_RANGE } from '../config';
+import { createPlayAreaOutline, isInsidePlayArea, toCorridor } from './playArea';
+import { CORRIDOR_HALF_WIDTH, CORRIDOR_LENGTH, TEST_PING_RANGE } from '../config';
 
 let initialised = false;
 let readout: HTMLDivElement | null = null;
 let readoutTimer = 0;
+let frames = 0;
+let fps = 0;
+let fpsWindowStart = performance.now();
 
 function isTyping(e: KeyboardEvent): boolean {
   const el = e.target as HTMLElement | null;
@@ -70,12 +75,13 @@ function updateReadout(force = false): void {
   readoutTimer = performance.now();
 
   const p = world.camera.position;
-  const dist = Math.hypot(p.x, p.z);
+  const { along, across } = toCorridor(p);
   const tiles = getTileStats();
   readout.textContent =
-    `DEBUG  ${isRevealAll() ? '[R] reveal all  ' : ''}${isDebugCameraActive() ? '[F] free-fly' : ''}\n` +
+    `DEBUG  ${isRevealAll() ? '[R] reveal all  ' : ''}${isDebugCameraActive() ? '[F] free-fly' : ''}   ${fps.toFixed(0)} fps\n` +
     `pos x ${p.x.toFixed(1)}  y ${p.y.toFixed(1)}  z ${p.z.toFixed(1)}  (+x west, +z north)\n` +
-    `from origin ${dist.toFixed(0)} m${dist > PLAY_RADIUS ? '  OUTSIDE PLAY_RADIUS' : ''}\n` +
+    `corridor along ${along.toFixed(0)} / ±${CORRIDOR_LENGTH / 2} m  across ${across.toFixed(0)} / ±${CORRIDOR_HALF_WIDTH} m` +
+    `${isInsidePlayArea(p) ? '' : '  OUTSIDE WALLS'}\n` +
     `tiles visible ${tiles.visible}  loading ${tiles.loading ? 'yes' : 'no'}  ground offset ${getGroundOffset().toFixed(2)} m\n` +
     `agents ${world.agents.length}  pings ${world.pings.length}`;
 }
@@ -86,6 +92,20 @@ export function initWorldDebug(): void {
   initialised = true;
   initDebugCamera();
   window.addEventListener('keydown', onKeyDown);
-  onRevealAllChange(() => updateReadout(true));
-  world.onUpdate(() => updateReadout());
+  const outline = createPlayAreaOutline();
+  world.scene.add(outline);
+  onRevealAllChange((on) => {
+    outline.visible = on;
+    updateReadout(true);
+  });
+  world.onUpdate(() => {
+    frames++;
+    const now = performance.now();
+    if (now - fpsWindowStart >= 1000) {
+      fps = (frames * 1000) / (now - fpsWindowStart);
+      frames = 0;
+      fpsWindowStart = now;
+    }
+    updateReadout();
+  });
 }
