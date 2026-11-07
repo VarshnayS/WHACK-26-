@@ -9,6 +9,7 @@
 
 import { initStunVignette } from './stunVignette';
 import { initStartScreen } from './startScreen';
+import { initInputHud } from './inputHud';
 import { world } from '../world';
 
 let tileAttributionEl: HTMLElement | null = null;
@@ -21,6 +22,7 @@ export function initHud(): void {
   initStunVignette(root);
   initStartScreen(root);
   initVisionLabel(root);
+  initInputHud(root);
 
   const attribution = document.createElement('div');
   // above the start screen too: attribution must always stay visible

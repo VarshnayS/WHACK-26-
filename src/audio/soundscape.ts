@@ -385,6 +385,8 @@ class Soundscape {
   private stepSide = 1;
   /** CaneState.tapSerial already played (sweep pings don't bump it, so they stay silent). */
   private caneTapHeard = 0;
+  /** CaneState.touchSerial already played (auto-sweep touch-downs: a soft tick). */
+  private caneTouchHeard = 0;
   private entityNextStep = 0;
   private entityLimp = 1;
   private readonly chatty = new WeakMap<Agent, boolean>();
@@ -657,11 +659,17 @@ class Soundscape {
         return;
       }
       case 'cane': {
-        // Only real taps make a sound; the cane's sweep-sonar pings are silent (src/senses/cane.ts).
+        // Only taps and auto-sweep touch-downs make a sound; the sweep-sonar pings are silent
+        // (src/senses/cane.ts).
         const cane = getCaneState();
-        if (cane.tapSerial === this.caneTapHeard) return;
-        this.caneTapHeard = cane.tapSerial;
-        this.playAt('cane', p.origin, C.CANE_GAIN * (cane.lastTapHard ? 2.2 : 1));
+        if (cane.tapSerial !== this.caneTapHeard) {
+          this.caneTapHeard = cane.tapSerial;
+          this.caneTouchHeard = cane.touchSerial;
+          this.playAt('cane', p.origin, C.CANE_GAIN * (cane.lastTapHard ? 2.2 : 1));
+        } else if (cane.touchSerial !== this.caneTouchHeard) {
+          this.caneTouchHeard = cane.touchSerial;
+          this.playAt('cane', p.origin, C.CANE_TOUCH_GAIN);
+        }
         return;
       }
       default:

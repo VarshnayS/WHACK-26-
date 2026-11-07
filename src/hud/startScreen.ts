@@ -15,6 +15,9 @@
  *
  * O (in game): reopens the vision picker over the game; click Resume (or O again) to go back.
  *
+ * Controller: while one is connected, a small controls overlay (built from PAD_BINDINGS in
+ * src/player/gamepadConfig.ts) shows under the keyboard controls line.
+ *
  * Startup timing: performance marks from agents / tiles / ground plus long tasks are logged once as
  * `[startup] ...` when the world is ready; getStartupReport() returns the same numbers.
  */
@@ -25,6 +28,7 @@ import { getTileStats } from '../world/tiles';
 import { groundStatus, setGroundLoading } from '../world/heightField';
 import { initVision } from '../senses/vision';
 import { createVisionPicker } from '../senses/visionPicker';
+import { PAD_BINDINGS, PAD_HELD, type PadButton } from '../player/gamepadConfig';
 import { createRoutePicker, initGoalMessage } from './routePicker';
 import { applyRouteStart } from '../player/route';
 
@@ -143,8 +147,10 @@ export function initStartScreen(hud: HTMLElement): void {
   const controls = document.createElement('div');
   controls.style.cssText = 'max-width:640px;opacity:0.85;font-size:13px;';
   controls.textContent =
-    'WASD walk · mouse look · speak, clap or SPACE to send sonar · the cane sweeps on its own (C to put it away / take it out), V to tap it · ' +
-    'O vision · U mute sound';
+    'WASD walk (Shift run) · mouse look · speak, clap or SPACE to send sonar · the cane auto-sweeps as you walk ' +
+    '(X on/off), hold C or right mouse to sweep by hand, B to tap it · V architect map · O vision · U mute sound';
+
+  const padPanel = createPadPanel();
 
   const barWrap = document.createElement('div');
   barWrap.style.cssText = 'width:min(320px,80vw);height:2px;background:rgba(255,255,255,0.2);';
@@ -166,7 +172,7 @@ export function initStartScreen(hud: HTMLElement): void {
   begin.style.cssText =
     'font:inherit;font-size:16px;padding:10px 28px;background:#000;color:#fff;border:1px solid #fff;border-radius:4px;';
 
-  el.append(title, sub, controls, barWrap, status, pickers, begin);
+  el.append(title, sub, controls, padPanel.el, barWrap, status, pickers, begin);
   hud.appendChild(el);
   mode = 'start';
 
@@ -249,6 +255,7 @@ export function initStartScreen(hud: HTMLElement): void {
 
   // loading progress (polled once per frame; the overlay hides the scene meanwhile)
   world.onUpdate(() => {
+    if (mode !== 'hidden') padPanel.update();
     if (mode !== 'start') return;
     const now = performance.now();
     const agentsOk = world.agents.length > 0;
@@ -291,4 +298,75 @@ export function initStartScreen(hud: HTMLElement): void {
 /** True while the start screen or the vision overlay is open. */
 export function isOverlayOpen(): boolean {
   return mode !== 'hidden';
+}
+
+const PAD_NAMES: Record<PadButton, string> = {
+  A: 'A',
+  B: 'B',
+  X: 'X',
+  Y: 'Y',
+  LB: 'LB',
+  RB: 'RB',
+  LT: 'LT',
+  RT: 'RT',
+  VIEW: 'View',
+  MENU: 'Menu',
+  L3: 'L3',
+  R3: 'R3',
+  UP: 'D-pad ↑',
+  DOWN: 'D-pad ↓',
+  LEFT: 'D-pad ←',
+  RIGHT: 'D-pad →',
+};
+
+/** Controller controls overlay: shown while a controller is connected. */
+function createPadPanel(): { el: HTMLElement; update(): void } {
+  const el = document.createElement('div');
+  el.style.cssText =
+    'display:none;max-width:640px;font-size:12px;text-align:left;border:1px solid rgba(255,255,255,0.35);' +
+    'border-radius:4px;padding:8px 12px;';
+  const head = document.createElement('div');
+  head.style.cssText = 'opacity:0.8;margin-bottom:6px;text-align:center;';
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:auto 1fr auto 1fr;gap:2px 10px;';
+  const rows: [string, string][] = [
+    ...PAD_HELD.map((h): [string, string] => [h.input, h.label]),
+    ...PAD_BINDINGS.filter((b) => b.layer === 'base').map((b): [string, string] => [PAD_NAMES[b.button], b.label]),
+  ];
+  for (const [input, label] of rows) {
+    const k = document.createElement('span');
+    k.textContent = input;
+    k.style.cssText = 'font-weight:600;white-space:nowrap;';
+    const v = document.createElement('span');
+    v.textContent = label;
+    v.style.opacity = '0.85';
+    grid.append(k, v);
+  }
+  const lt = document.createElement('div');
+  lt.style.cssText = 'margin-top:6px;opacity:0.7;';
+  lt.textContent =
+    'Hold LT: ' +
+    PAD_BINDINGS.filter((b) => b.layer === 'lt')
+      .map((b) => `${PAD_NAMES[b.button]} ${b.label.toLowerCase()}`)
+      .join(' · ');
+  el.append(head, grid, lt);
+
+  let shownId: string | null = null;
+  return {
+    el,
+    update() {
+      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      let id: string | null = null;
+      for (const p of pads) {
+        if (p && p.connected) {
+          id = p.id;
+          break;
+        }
+      }
+      if (id === shownId) return;
+      shownId = id;
+      el.style.display = id ? 'block' : 'none';
+      if (id) head.textContent = `Controller connected: ${id.replace(/\s*\(.*\)\s*$/, '')}`;
+    },
+  };
 }
