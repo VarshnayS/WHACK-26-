@@ -34,7 +34,7 @@ If one person runs two agents at once (e.g. SOUND and AUDIT), each must run in i
 6. **No history rewriting.** No force-push, no `reset --hard` on shared branches, no rebasing someone else's branch.
 7. **Don't merge PRs.** Open your PR; a human merges it.
 8. **Secrets.** Never print, log, commit or paste the API key or `.env` contents, including in coordination messages. Don't open `.env` in a way that shares it as context.
-9. **Rendering style.** Pitch black, white lines only, no colour or textures anywhere.
+9. **Rendering style.** White lines on black; red is allowed only for stuns and danger. No other colour and no textures anywhere.
 10. **Performance.** Keep 60 fps at eye height in the corridor on a real GPU. Report FPS in your PR.
 11. **Tier discipline.** Only do the tier and sections you were given. Open a PR as soon as they work. Don't start extras.
 
