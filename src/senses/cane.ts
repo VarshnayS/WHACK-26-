@@ -8,9 +8,9 @@
  * Every frame two short rays are cast against world.tilesGroup: one along the shaft (hand to tip)
  * and one swept from the previous tip to the new one, just above the ground. A steep surface
  * (wall, curb face, bollard) is a contact: the tip stops there and bounces back, and the cane fires
- * world.ping(tip, 1.5, 'cane') plus world.audit.record({ kind: 'detected', caneActive: true }).
+ * world.ping(tip, CANE_TAP_RANGE, 'cane') plus world.audit.record({ kind: 'detected', caneActive: true }).
  * The soundscape (src/audio/soundscape.ts) plays the tap for every 'cane' ping, louder for bigger
- * ranges. V while holding = a hard tap: world.ping(tip, 4, 'cane').
+ * ranges. V while holding = a hard tap: world.ping(tip, CANE_HARD_TAP_RANGE, 'cane').
  * Flat hits along the shaft (the floor) just rest the tip on the ground.
  * Tuning: src/senses/config.ts.
  */

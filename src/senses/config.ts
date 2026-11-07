@@ -41,8 +41,8 @@ export const CANE_SWEEP_RAY_HEIGHT = 0.12;
 /** Surfaces with a normal steeper than this (|n.y| < it) are obstacles; flatter ones are floor. */
 export const CANE_MAX_OBSTACLE_NORMAL_Y = 0.7;
 /** Ping range (m) of a contact tap / a hard tap (V). */
-export const CANE_TAP_RANGE = 1.5;
-export const CANE_HARD_TAP_RANGE = 4;
+export const CANE_TAP_RANGE = 1.0;
+export const CANE_HARD_TAP_RANGE = 2.5;
 /** Minimum time between two contact taps (s), so resting on a wall doesn't machine-gun pings. */
 export const CANE_TAP_COOLDOWN = 0.18;
 /** While the cane stays against something, it taps again this often (s). */
