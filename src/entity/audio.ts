@@ -13,7 +13,8 @@
  * The AudioListener lives on the camera. If another module already added one, it is reused.
  */
 import * as THREE from 'three';
-import type { EntityBrain, EntityState } from './brain';
+import type { EntityStateName } from '../shared/contracts';
+import type { EntityBrain } from './brain';
 import { breathCycle, footstep, gasp, growl, shriek } from './synth';
 
 interface Voice {
@@ -21,20 +22,18 @@ interface Voice {
   bus: GainNode;
 }
 
-const STRIDE: Record<EntityState, number> = {
-  dormant: Infinity,
-  wander: 0.85,
+const STRIDE: Record<EntityStateName, number> = {
+  patrol: 0.85,
   investigate: 1.0,
-  hunt: 1.15,
+  chase: 1.15,
   caught: Infinity,
 };
 
 /** Breathing loudness and pace per state. */
-const BREATH: Record<EntityState, { gain: number; rate: number }> = {
-  dormant: { gain: 0.5, rate: 0.85 },
-  wander: { gain: 0.7, rate: 1.0 },
+const BREATH: Record<EntityStateName, { gain: number; rate: number }> = {
+  patrol: { gain: 0.7, rate: 1.0 },
   investigate: { gain: 0.9, rate: 1.2 },
-  hunt: { gain: 1.2, rate: 1.7 },
+  chase: { gain: 1.2, rate: 1.7 },
   caught: { gain: 0, rate: 1 },
 };
 
@@ -128,19 +127,14 @@ export function initEntityAudio(brain: EntityBrain, body: THREE.Object3D, camera
   };
 
   brain.on((e) => {
-    switch (e) {
-      case 'heard':
-        if (brain.state !== 'hunt') play(mouth, sounds.gasp, 0.9, 0.9 + Math.random() * 0.15);
-        break;
-      case 'hunt-start':
-        play(mouth, sounds.growl, 1.2);
-        break;
-      case 'hunt-lost':
-        play(mouth, sounds.grumble, 0.7);
-        break;
-      case 'caught':
-        play(mouth, sounds.shriek, 1.5);
-        break;
+    if (e.type === 'heard') {
+      if (brain.state !== 'chase') play(mouth, sounds.gasp, 0.9, 0.9 + Math.random() * 0.15);
+    } else if (e.type === 'caught') {
+      play(mouth, sounds.shriek, 1.5);
+    } else if (e.state === 'chase') {
+      play(mouth, sounds.growl, 1.2);
+    } else if (e.previous === 'chase' && e.state === 'patrol') {
+      play(mouth, sounds.grumble, 0.7); // lost interest
     }
   });
 
@@ -159,7 +153,7 @@ export function initEntityAudio(brain: EntityBrain, body: THREE.Object3D, camera
     if (travelled >= stride) {
       travelled = 0;
       const heavy = stepIndex++ % 2 === 0;
-      const loud = brain.state === 'hunt' ? 1.3 : brain.state === 'investigate' ? 1.0 : 0.8;
+      const loud = brain.state === 'chase' ? 1.3 : brain.state === 'investigate' ? 1.0 : 0.8;
       play(
         feet,
         sounds.steps[Math.floor(Math.random() * sounds.steps.length)],

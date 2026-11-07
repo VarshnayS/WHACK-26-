@@ -1,189 +1,165 @@
 /**
  * src/entity/index.ts: the entity that hunts the player
-<<<<<<< HEAD
- * Owner: entity (src/entity/)
+ * Owner: ENTITY (Ayo). Called once from src/main.ts as initEntity(world).
  *
- * Plugs in through the shared `world` object only:
- *  - hears sonar pings via getActivePings() (louder ping = heard from further away)
- *  - walks the OSM footway graph (straight lines until src/world/osm.ts is implemented)
- *  - rendered with the shared sonarMaterial, so it's only visible when sonar or R reveals it
- *  - makes positional sound: footsteps, breathing, gasp/growl/shriek (src/entity/audio.ts)
- *  - stands on groundHeight() from src/player/collision.ts (flat 0 until implemented)
+ * Uses only the shared world object plus read-only world helpers:
+ *   - hears pings from world.activePings() (falls back to world.pings, typed 'voice', until the
+ *     SOUND branch fills activePings in); ignores the pings it fires itself
+ *   - patrols the footway graph (getPathGraph, src/world/osm.ts), stays inside the corridor
+ *     (clampToPlayArea, src/world/playArea.ts), stands on sampleGround (src/world/heightField.ts)
  *
- * Other modules can use:
- *   alertEntity(position, range)   a noise that isn't a ping (e.g. bumping into something)
- *   onEntityEvent(fn)              'caught' | 'hunt-start' | 'hunt-lost' | 'heard'
- *   getEntityObject()              its mesh (attach extra PositionalAudio here)
- *   getEntityDistance(), getEntityState(), getEntityAgitation()   for HUD/heartbeat audio
- *   resetEntity()                  respawn far away after a game over
- *   setEntityVolume(0..1)          overall volume of its sounds (src/entity/audio.ts)
+ * What other modules get:
+ *   world.entity                       { state, position, velocity }, updated every frame
+ *   world.on('entityState', cb)        payload { state, previous, position } on every state change
+ *   world.on('caught', cb)             payload { position } when it reaches the player
+ *   world.audit.record(...)            { kind: 'caught', hit: 'entity', position } on a catch
+ *   faint world.ping(pos, 2, 'pedestrian') footsteps as it walks
+ *
+ * Debug: T overlay, N test voice ping (src/entity/debug.ts). In dev, window.__entity.
  */
 import * as THREE from 'three';
-import { world } from '../world';
-import { buildPathGraph, loadOsm } from '../world/osm';
-import { OSM_URL } from '../config';
-import { getActivePings, type Ping } from '../render/pings';
-import { sonarMaterial } from '../render/sonarMaterial';
-import { groundHeight } from '../player/collision';
-import { EntityBrain, type BrainEvent, type EntityState } from './brain';
-import { ENTITY } from './config';
-import { distXZ } from './pathfind';
+import type { World } from '../world';
+import type { EntityState, PingType } from '../shared/contracts';
+import { getPathGraph } from '../world/osm';
+import { clampToPlayArea } from '../world/playArea';
+import { sampleGround } from '../world/heightField';
+import { EntityBrain, type Sound } from './brain';
+import { createEntityBody } from './body';
+import { initEntityDebug } from './debug';
 import { initEntityAudio } from './audio';
+import { AUDIO_ENABLED, FOOTSTEP_PING_EVERY, FOOTSTEP_PING_RANGE } from './config';
 
-export { setEntityVolume } from './audio';
+/** A ping as the entity sees it, whichever list it came from. */
+interface HeardPing {
+  origin: THREE.Vector3;
+  range: number;
+  start: number;
+  type: PingType;
+}
 
-export type { EntityState, BrainEvent } from './brain';
+/** Pings it fired itself, so it can ignore them. */
+const ownPings: { origin: THREE.Vector3; time: number }[] = [];
+/** Pings already processed (key -> time it was seen), so each is heard once. */
+const seen = new Map<string, number>();
 
 let brain: EntityBrain | null = null;
-let body: THREE.Group | null = null;
-const heardPings = new WeakSet<Ping>();
-const lastPlayerPos = new THREE.Vector3();
-let playerSpeed = 0;
-let updateAudio: ((dt: number) => void) | null = null;
+let resetFn: (() => void) | null = null;
 
-/** Load the path graph, build the mesh, spawn far from the player and start thinking. */
-export async function initEntity(): Promise<void> {
-  let graph = null;
-  try {
-    graph = buildPathGraph(await loadOsm(OSM_URL), 'footway');
-  } catch (err) {
-    console.warn('[entity] no OSM graph, walking in straight lines', err);
-  }
-
-  brain = new EntityBrain({ graph, groundHeight });
-  body = buildBody();
-  world.scene.add(body);
-
-  const player = world.camera.position;
-  lastPlayerPos.copy(player);
-  brain.spawn(player);
-  syncBody();
-  updateAudio = initEntityAudio(brain, body, world.camera);
-
-  // It gives itself away with a short sonar burst when it locks on, and a big one when it catches you.
-  brain.on((e, b) => {
-    if (e === 'hunt-start') world.ping(b.position.clone().setY(b.position.y + 1.2), ENTITY.HUNT_REVEAL_RANGE);
-    if (e === 'caught') world.ping(b.position.clone().setY(b.position.y + 1.2), ENTITY.CATCH_REVEAL_RANGE);
-  });
-
-  world.onUpdate(update);
-
-  if (import.meta.env.DEV) {
-    (window as unknown as { __entity: unknown }).__entity = {
-      brain,
-      body,
-      alert: alertEntity,
-      reset: resetEntity,
-    };
-  }
-  console.info(`[entity] spawned ${distXZ(brain.position, player).toFixed(0)} m away (graph: ${graph ? graph.positions.length : 0} nodes)`);
+function nowSeconds(): number {
+  return performance.now() / 1000;
 }
 
-function update(dt: number): void {
-  if (!brain || dt <= 0) return;
-  const player = world.camera.position;
-
-  // Smoothed horizontal player speed (standing still hides you from close-range sensing).
-  const instant = distXZ(player, lastPlayerPos) / dt;
-  playerSpeed += (instant - playerSpeed) * Math.min(1, dt * 10);
-  lastPlayerPos.copy(player);
-
-  for (const ping of getActivePings()) {
-    if (heardPings.has(ping)) continue;
-    heardPings.add(ping);
-    brain.hear({ position: ping.origin, range: ping.range });
-  }
-
-  brain.update(dt, player, playerSpeed);
-  syncBody();
-  updateAudio?.(dt);
+function pingKey(p: HeardPing): string {
+  return `${p.start.toFixed(3)}|${p.origin.x.toFixed(2)}|${p.origin.z.toFixed(2)}`;
 }
 
-function syncBody(): void {
-  if (!brain || !body) return;
-  body.position.copy(brain.position);
-  // Smooth turning so it doesn't snap between path segments.
-  let diff = brain.heading - body.rotation.y;
-  diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-  body.rotation.y += diff * 0.2;
-  // Slight sway while moving, stiller when listening.
-  const t = performance.now() / 1000;
-  body.rotation.z = Math.sin(t * 3.1) * 0.04 * Math.min(1, brain.speed);
+function isOwn(p: HeardPing): boolean {
+  return ownPings.some((o) => Math.abs(o.time - p.start) < 0.25 && o.origin.distanceToSquared(p.origin) < 0.01);
 }
 
-/** A tall, stooped figure with long arms. Every part uses the shared sonar material. */
-function buildBody(): THREE.Group {
-  const h = ENTITY.HEIGHT;
-  const group = new THREE.Group();
-  group.name = 'entity';
-  const add = (geo: THREE.BufferGeometry, x: number, y: number, z: number, rx = 0, rz = 0) => {
-    const m = new THREE.Mesh(geo, sonarMaterial);
-    m.position.set(x, y, z);
-    m.rotation.set(rx, 0, rz);
-    group.add(m);
-  };
-  const leg = new THREE.CapsuleGeometry(0.07, h * 0.38, 4, 8);
-  add(leg, -0.13, h * 0.22, 0);
-  add(leg, 0.13, h * 0.22, 0);
-  // Torso leans forward.
-  add(new THREE.CapsuleGeometry(0.2, h * 0.3, 4, 10), 0, h * 0.62, 0.08, 0.25);
-  // Head hangs low and forward.
-  add(new THREE.SphereGeometry(0.17, 12, 10), 0, h * 0.86, 0.3);
-  // Arms hang down past the knees.
-  const arm = new THREE.CapsuleGeometry(0.05, h * 0.55, 4, 8);
-  add(arm, -0.3, h * 0.46, 0.18, 0.15, 0.08);
-  add(arm, 0.3, h * 0.46, 0.18, 0.15, -0.08);
-  return group;
+/** Pings currently travelling, from the contract (or the untyped legacy list until SOUND lands). */
+function readPings(world: World): HeardPing[] {
+  const active = world.activePings();
+  if (active.length > 0) return active;
+  const legacy = (world as Partial<Pick<World, 'pings'>>).pings ?? [];
+  return legacy.map((p) => ({ origin: p.origin, range: p.range, start: p.start, type: 'voice' as PingType }));
 }
-
-/** A noise that isn't a sonar ping (e.g. walking into a wall). `range` uses ping units (metres). */
-export function alertEntity(position: THREE.Vector3, range: number): boolean {
-  return brain ? brain.hear({ position: position.clone(), range }) : false;
-}
-
-/** Subscribe to entity events. Returns an unsubscribe function. */
-export function onEntityEvent(fn: (e: BrainEvent) => void): () => void {
-  if (!brain) {
-    console.warn('[entity] onEntityEvent called before initEntity()');
-    return () => {};
-  }
-  return brain.on((e) => fn(e));
-}
-
-/** Respawn far from the player in the dormant state. */
-export function resetEntity(): void {
-  brain?.reset(world.camera.position);
-  syncBody();
-}
-
-export function getEntityState(): EntityState | null {
-  return brain?.state ?? null;
-}
-
-export function getEntityPosition(): THREE.Vector3 | null {
-  return brain?.position ?? null;
-}
-
-/** Horizontal distance from the player, or Infinity before init. */
-export function getEntityDistance(): number {
-  return brain ? distXZ(brain.position, world.camera.position) : Infinity;
-}
-
-/** 0..1, how worked up it is (good for heartbeat volume/tempo). */
-export function getEntityAgitation(): number {
-  return brain?.agitation ?? 0;
-}
-
-/** The entity's mesh group (attach PositionalAudio here). */
-export function getEntityObject(): THREE.Object3D | null {
-  return body;
-}
-=======
- // Stub entry point: does nothing yet. Called once from src/main.ts.
- */
-import type { World } from '../world';
 
 export function initEntity(world: World): void {
-  void world; // TODO: set world.entity, emit 'entityState' and 'caught'
+  const b = new EntityBrain({
+    graph: () => getPathGraph('footway'),
+    ground: sampleGround,
+    clamp: (p, inset) => clampToPlayArea(p, inset, new THREE.Vector3()),
+  });
+  brain = b;
+
+  const body = createEntityBody();
+  world.scene.add(body.root);
+
+  const player = world.camera.position;
+  b.spawn(player);
+
+  const state: EntityState = { state: b.state, position: b.position.clone(), velocity: new THREE.Vector3() };
+  world.entity = state;
+
+  b.on((e) => {
+    if (e.type === 'state') {
+      world.emit('entityState', { state: e.state, previous: e.previous, position: b.position.clone() });
+    } else if (e.type === 'caught') {
+      const position = b.position.clone();
+      world.emit('caught', { position });
+      world.audit.record({ kind: 'caught', hit: 'entity', position });
+    }
+  });
+
+  const firePing = (origin: THREE.Vector3, range: number, type: PingType) => {
+    ownPings.push({ origin: origin.clone(), time: nowSeconds() });
+    world.ping(origin, range, type);
+  };
+
+  const debug = initEntityDebug(world, b);
+  const audio = AUDIO_ENABLED ? initEntityAudio(b, body.root, world.camera) : null;
+
+  let walked = 0;
+  const last = b.position.clone();
+
+  world.onUpdate((dt) => {
+    const t = nowSeconds();
+
+    // Forget old bookkeeping.
+    while (ownPings.length > 0 && t - ownPings[0].time > 10) ownPings.shift();
+    for (const [k, seenAt] of seen) if (t - seenAt > 15) seen.delete(k);
+
+    // Hearing: each new ping once, never its own.
+    for (const p of readPings(world)) {
+      const key = pingKey(p);
+      if (seen.has(key)) continue;
+      seen.set(key, t);
+      if (isOwn(p)) continue;
+      const sound: Sound = { position: p.origin, range: p.range, type: p.type };
+      b.hear(sound);
+    }
+
+    b.update(dt, player);
+
+    // Faint footstep pings so a careful player can hear it coming.
+    const moved = Math.hypot(b.position.x - last.x, b.position.z - last.z);
+    last.copy(b.position);
+    walked += moved > 5 ? 0 : moved;
+    if (walked >= FOOTSTEP_PING_EVERY * (0.8 + Math.random() * 0.4)) {
+      walked = 0;
+      firePing(b.position.clone().setY(b.position.y + 0.05), FOOTSTEP_PING_RANGE, 'pedestrian');
+    }
+
+    body.update(dt, b.position, b.heading, b.speed);
+
+    state.state = b.state;
+    state.position.copy(b.position);
+    state.velocity.copy(b.velocity);
+    world.entity = state;
+
+    debug(dt);
+    audio?.(dt);
+  });
+
+  resetFn = () => {
+    b.reset(player);
+    last.copy(b.position);
+    walked = 0;
+  };
+
+  if (import.meta.env.DEV) {
+    (window as unknown as { __entity: unknown }).__entity = { brain: b, body: body.root, reset: resetEntity };
+  }
+  console.info(`[entity] spawned ${b.position.distanceTo(player).toFixed(0)} m away`);
 }
->>>>>>> origin/main
+
+/** Respawn far from the player and patrol again (e.g. after a game over). */
+export function resetEntity(): void {
+  resetFn?.();
+}
+
+/** The brain, for tests and tools. Null before initEntity(). */
+export function getEntityBrain(): EntityBrain | null {
+  return brain;
+}
