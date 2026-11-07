@@ -6,14 +6,16 @@
  *  - hears sonar pings via getActivePings() (louder ping = heard from further away)
  *  - walks the OSM footway graph (straight lines until src/world/osm.ts is implemented)
  *  - rendered with the shared sonarMaterial, so it's only visible when sonar or R reveals it
+ *  - makes positional sound: footsteps, breathing, gasp/growl/shriek (src/entity/audio.ts)
  *  - stands on groundHeight() from src/player/collision.ts (flat 0 until implemented)
  *
  * Other modules can use:
  *   alertEntity(position, range)   a noise that isn't a ping (e.g. bumping into something)
  *   onEntityEvent(fn)              'caught' | 'hunt-start' | 'hunt-lost' | 'heard'
- *   getEntityObject()              attach THREE.PositionalAudio (footsteps/breathing) here
+ *   getEntityObject()              its mesh (attach extra PositionalAudio here)
  *   getEntityDistance(), getEntityState(), getEntityAgitation()   for HUD/heartbeat audio
  *   resetEntity()                  respawn far away after a game over
+ *   setEntityVolume(0..1)          overall volume of its sounds (src/entity/audio.ts)
  */
 import * as THREE from 'three';
 import { world } from '../world';
@@ -25,6 +27,9 @@ import { groundHeight } from '../player/collision';
 import { EntityBrain, type BrainEvent, type EntityState } from './brain';
 import { ENTITY } from './config';
 import { distXZ } from './pathfind';
+import { initEntityAudio } from './audio';
+
+export { setEntityVolume } from './audio';
 
 export type { EntityState, BrainEvent } from './brain';
 
@@ -33,6 +38,7 @@ let body: THREE.Group | null = null;
 const heardPings = new WeakSet<Ping>();
 const lastPlayerPos = new THREE.Vector3();
 let playerSpeed = 0;
+let updateAudio: ((dt: number) => void) | null = null;
 
 /** Load the path graph, build the mesh, spawn far from the player and start thinking. */
 export async function initEntity(): Promise<void> {
@@ -51,6 +57,7 @@ export async function initEntity(): Promise<void> {
   lastPlayerPos.copy(player);
   brain.spawn(player);
   syncBody();
+  updateAudio = initEntityAudio(brain, body, world.camera);
 
   // It gives itself away with a short sonar burst when it locks on, and a big one when it catches you.
   brain.on((e, b) => {
@@ -88,6 +95,7 @@ function update(dt: number): void {
 
   brain.update(dt, player, playerSpeed);
   syncBody();
+  updateAudio?.(dt);
 }
 
 function syncBody(): void {
