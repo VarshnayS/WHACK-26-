@@ -148,11 +148,15 @@ src/
   world/index.ts           exports the shared `world` object
   world/tiles.ts           loads tiles, strips textures, applies shared material
   world/osm.ts             OSM loading + lat/lon to local metres
-  world/agents.ts          pedestrians (capsules) and cars (boxes)
+  world/agents.ts          pedestrians + cars: paths, groups, crossings, player contacts
+  world/humanoid.ts        procedural walking people, one InstancedMesh per body part
+  world/agentMaterial.ts   sonar material for agents (object-space grid, instancing)
+  world/agentContacts.ts   capsule / oriented-box contact tests (no raycasts)
+  world/heightField.ts     precomputed ground height grid agents stand on
   world/playArea.ts        play corridor: isInsidePlayArea, clampToPlayArea
   world/debug*.ts          R reveal-all grid, F free-fly camera, debug readout
   player/controller.ts     first-person movement
-  player/collision.ts      collision + ground stubs (to be implemented)
+  player/collision.ts      raycast wall + ground collision against world.tilesGroup
   hud/hud.ts               FPS + attribution overlay
 ```
 
@@ -203,7 +207,7 @@ world.onUpdate((dt) => { /* runs every frame */ });
 |---|---|
 | **Sonar look** | Tune `src/render/sonarMaterial.ts` (wave speed, ring width, fade, grid density). Don't add per-object materials. |
 | **Mic** | Done: see "Audio sonar" below. Mic needs `localhost` or HTTPS. |
-| **Collision** | Fill in `checkCollision(pos, dir)` and `groundHeight(pos)` in `src/player/collision.ts` (raycasts against `world.tilesGroup`, which works on geometry with no textures). Add `three-mesh-bvh` only if FPS drops. |
+| **Collision** | Done: `src/player/collision.ts` raycasts only against `world.tilesGroup`; the controller also keeps the player inside the corridor. `getPlayerController().applyImpulse(vec, { impactSpeed, forceStun })` pushes the player through the normal momentum/friction/wall-sliding and stuns with the same thresholds as wall hits. Add `three-mesh-bvh` only if FPS drops. |
 | **Spatial audio** | Attach `THREE.PositionalAudio` to each entry in `world.agents` (footsteps, engines). |
 | **Entity AI** | Use the OSM path graph from `src/world/osm.ts` for pathfinding; move towards the player's last noise position. Render it with the shared material too. |
 
@@ -304,6 +308,15 @@ Open the meter with backtick: green bar = RMS, white line = noise floor, red lin
 
 Clap pulses fire when the clap's energy dies away (about 80 ms), so loudness is measured over the whole clap. `dispose()` from `src/audio` stops the mic tracks, closes the AudioContext and removes the overlay and listeners.
 
+## Agents (pedestrians and cars)
+
+- `PEDESTRIAN_COUNT` / `CAR_COUNT` in `src/config.ts`. Pedestrians are procedural low-poly humanoids (1.6 to 1.9 m, 1.1 to 1.6 m/s) drawn with one `InstancedMesh` per body part and a sine-wave walk cycle; some walk in groups of 2 to 3, some loiter, some cross University Road, and they lightly avoid each other.
+- **Player contact** is checked every frame with shapes, not raycasts: the player is a 0.3 m capsule, pedestrians are capsules, cars are 4.4 x 1.5 x 1.8 m oriented boxes.
+  - Pedestrian: player and pedestrian get an equal and opposite push along the contact normal; the pedestrian stumbles for 1.5 s, then walks back to the nearest point on its path. The player is stunned if the closing speed passes the wall-hit threshold.
+  - Car: never reacts and keeps driving. The player is flung along the normal plus part of the car's velocity, scaled by car speed + player speed, and always stunned.
+- Agents stand on a ground height grid (every 2 m) built from `groundHeight()` after the tiles load, so there is no per-agent raycast.
+- Noise: every agent collision should call `world.emitNoise(position, loudness)` (cars 0.9, pedestrians 0.5). That function does not exist on `world` yet, so `agents.ts` calls it only if present (`TODO(world.emitNoise)`).
+
 ## Attribution (must stay visible)
 
 - The Google Maps logo and the tiles' copyright text, shown in the HUD corner in white
@@ -326,6 +339,6 @@ The HUD is a normal HTML overlay, so it stays visible even though the 3D scene i
 | `[offline miss]` for tiles you'd warmed | The cached `root.json` is from a newer session. Copy the warmed session's `tile-cache/v1/3dtiles/root.<timestamp>.json` over `root.json` |
 | `--env-file` not recognised | Upgrade Node to 20.6+ |
 | Grid lines shimmer far away | Normal with dense meshes; shorten `CORRIDOR_LENGTH` or fade the grid with distance in the shader |
-| Agents float or sit underground | Ground stub returns 0 until collision is implemented; adjust height in config for now |
+| Agents float or sit underground | Agents use the height grid from `src/world/heightField.ts`, built a few seconds after the tiles finish loading (the console prints `[ground] height grid ready`); until then they sit at y = 0 |
 | OSM roads don't line up with tiles | Adjust `YAW_OFFSET` / `XZ_OFFSET` in `src/config.ts` with F + R |
 | Mic doesn't work | Must be served from `localhost` or HTTPS; check browser permissions |
