@@ -304,7 +304,9 @@ While the start screen is up the ground grid builds in loading mode (24 ms per f
 
 ## Soundscape
 
-`src/audio/soundscape.ts`: Web Audio with HRTF panners; the listener follows the camera. Car engines (pitch and level follow speed, exaggerated Doppler), pedestrian footsteps and murmured conversations in groups, your own steps / cane taps / stun thud, the entity's uneven steps, and a quiet ambient bed. About 10 spatial voices at once, faded in and out. All sounds are procedural; list CC0 files in `SFX_FILES` (`src/audio/soundscapeConfig.ts`, files in `public/sfx/`) to replace any of them.
+`src/audio/soundscape.ts`: Web Audio with HRTF panners; the listener follows the camera. Car engines (recorded loops, pitch and level follow speed, mild Doppler, a recorded pass-by when a car passes close), pedestrian footsteps (recorded) and conversations in groups, your own steps / cane taps / stun thud, the entity's uneven steps, and a quiet ambient bed. About 10 spatial voices at once, faded in and out. Recordings are listed in `SFX_FILES` (`src/audio/soundscapeConfig.ts`, files in `public/sfx/`) and load behind the start screen; anything not listed, or that fails to load, is procedural.
+
+**Sound credits:** the recordings in `public/sfx/` are CC0, CC BY or public domain; authors, sources and licences are in [`public/sfx/CREDITS.md`](public/sfx/CREDITS.md).
 
 ## White cane
 
@@ -314,6 +316,7 @@ Hold C or right mouse to sweep the cane (1.2 m, 60°), drawn as a thin white lin
 
 - The Google Maps logo and the tiles' copyright text, shown in the HUD corner in white
 - "© OpenStreetMap contributors"
+- Sound credits for the CC BY recordings: [`public/sfx/CREDITS.md`](public/sfx/CREDITS.md)
 
 The HUD is a normal HTML overlay, so it stays visible even though the 3D scene is black.
 
