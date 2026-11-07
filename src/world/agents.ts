@@ -1014,6 +1014,16 @@ export async function initAgents(): Promise<void> {
   crowd = new HumanoidCrowd(PEDESTRIAN_COUNT, personMaterial);
   world.agentsGroup.add(crowd.group);
 
+  const osmWays = osm.ways.length;
+  populateAgents(osmWays);
+
+  world.onUpdate(updateAgents);
+  performance.mark('agents:ready');
+}
+
+/** Spawn the pedestrians and cars on the path graphs (initAgents and resetAgents). */
+function populateAgents(osmWays: number): void {
+  if (!pedestrianGraph || !carGraph || !crowd) return;
   let groups = 0;
   if (pedestrianGraph.edges.length > 0) {
     while (walkers.length < PEDESTRIAN_COUNT) {
@@ -1034,16 +1044,28 @@ export async function initAgents(): Promise<void> {
 
   for (let i = 0; i < CAR_COUNT; i++) spawnCar(carGraph, cars);
 
-  if (osm.ways.length > 0) {
+  if (osmWays > 0) {
     console.info(
       `[agents] ${walkers.length} pedestrians in ${groups} groups ` +
         `(${walkers.filter((w) => w.loiterer).length} loiterers, ${walkers.filter((w) => w.crosser).length} crossers; ` +
         `${pedestrianGraph.edges.length} path edges), ${cars.length} cars (${carGraph.edges.length} road edges)`,
     );
   }
+}
 
-  world.onUpdate(updateAgents);
-  performance.mark('agents:ready');
+/**
+ * Remove every pedestrian and car and spawn a fresh set (used when a run restarts, so nobody is
+ * left stumbling or mid-crossing). world.agents is emptied in place; the soundscape drops stale cars.
+ */
+export function resetAgents(): void {
+  if (!initialised || !crowd) return;
+  for (const w of walkers) w.agent.object.removeFromParent();
+  for (const c of cars) c.mesh.removeFromParent();
+  walkers.length = 0;
+  cars.length = 0;
+  world.agents.length = 0;
+  seenGeneration = -1; // snap the new agents onto the ground grid
+  populateAgents(0);
 }
 
 // --- debug / tests -----------------------------------------------------------------------------

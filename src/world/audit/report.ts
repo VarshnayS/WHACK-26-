@@ -17,7 +17,15 @@
  * dynamic import in src/world/audit/log.ts as described in the accompanying notes.
  */
 
+import * as THREE from 'three';
+import {
+  CORRIDOR_BEARING,
+  CORRIDOR_HALF_WIDTH,
+  CORRIDOR_LENGTH,
+} from '../../config';
 import type { World } from '../index';
+import { getTiles } from '../tiles';
+import { isRevealAll, setRevealAll } from '../../render/sonarMaterial';
 import { captureTopDownMap, worldToMap, type TopDownView } from './topDownMap';
 import {
   clearEvents,
@@ -37,6 +45,9 @@ const CELL_SIZE = 2;
 const LOW_OBSTACLE_TYPES = new Set(['building', 'low_obstacle', 'street_furniture']);
 const HEAT_FULL_SCALE = 5;
 
+/** Temporary camera settings used only for the one-off WebGL snapshot. */
+const SNAPSHOT_FOV = 5;
+const SNAPSHOT_FAR_MIN = 2000;
 /** Extra world-space breathing room around the playable corridor. */
 const SNAPSHOT_PADDING_METRES = 8;
 
@@ -345,13 +356,131 @@ export function initReport(world: World): () => void {
       snapshotError = 'Could not render the top-down view (see the console).';
       return false;
     }
-    snapshotView = map.view;
-    snapshotError = '';
-    console.info(
-      `[audit] cached full-corridor snapshot (${snapshotCanvas.width}×${snapshotCanvas.height}, ` +
-      `about ${(map.view.halfWidth * 2).toFixed(1)} m along × ${(map.view.halfHeight * 2).toFixed(1)} m across)`,
-    );
-    return true;
+    const source = world.renderer.domElement;
+    const sourceWidth = Math.max(1, source.width || window.innerWidth);
+    const sourceHeight = Math.max(1, source.height || window.innerHeight);
+    // The report is a map of the whole playable corridor, not a view centred on
+    // wherever the player happens to be when the report opens.
+    const target = new THREE.Vector3(0, 0, 0);
+
+    // The game is drawn with a sonar mask that hides everything the player hasn't "heard", so without
+    // this the overview is black (only the player's arm's reach would show). Reveal the whole grid for
+    // this one render and hide the moving things (people, cars, the entity) so the map is clean.
+    const savedRevealAll = isRevealAll();
+    const entityBody = world.scene.getObjectByName('entity');
+    const savedAgentsVisible = world.agentsGroup.visible;
+    const savedEntityVisible = entityBody?.visible ?? true;
+
+    const savedCamera = {
+      position: camera.position.clone(),
+      rotation: camera.rotation.clone(),
+      up: camera.up.clone(),
+      fov: camera.fov,
+      far: camera.far,
+      near: camera.near,
+      aspect: camera.aspect,
+      zoom: camera.zoom,
+    };
+
+    const bearing = THREE.MathUtils.degToRad(CORRIDOR_BEARING);
+    // World-space corridor basis: along the road and across it. For a landscape
+    // overview, align the long road axis with screen-right and the road width with
+    // screen-up. A top-down camera's `up` vector therefore points across the road.
+    const corridorAcross = new THREE.Vector3(Math.cos(bearing), 0, Math.sin(bearing));
+
+    try {
+      setRevealAll(true);
+      world.agentsGroup.visible = false;
+      if (entityBody) entityBody.visible = false;
+      fitCanvasToRenderer();
+
+      const aspect = sourceWidth / sourceHeight;
+      const halfAlong = CORRIDOR_LENGTH / 2 + SNAPSHOT_PADDING_METRES;
+      const halfAcross = CORRIDOR_HALF_WIDTH + SNAPSHOT_PADDING_METRES;
+
+      // Perspective camera FOV is vertical. Fit both corridor dimensions while
+      // preserving the renderer's aspect ratio. On a narrow/portrait canvas the
+      // required altitude rises automatically so neither end of the corridor clips.
+      const requiredHalfViewHeight = Math.max(halfAcross, halfAlong / aspect);
+      const cameraHeight = requiredHalfViewHeight /
+        Math.tan(THREE.MathUtils.degToRad(SNAPSHOT_FOV / 2));
+
+      camera.position.set(target.x, target.y + cameraHeight, target.z);
+      camera.up.copy(corridorAcross);
+      camera.fov = SNAPSHOT_FOV;
+      camera.far = Math.max(SNAPSHOT_FAR_MIN, cameraHeight + 1000);
+      camera.aspect = aspect;
+      camera.lookAt(target);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
+
+      // Re-evaluate the loaded tile set for this camera pose. This is one update, not
+      // a per-frame camera/LOD loop; any newly requested tile loads complete asynchronously.
+      try {
+        const tiles = getTiles();
+        if (tiles) {
+          tiles.setResolutionFromRenderer(camera, world.renderer);
+          tiles.update();
+        }
+      } catch (error) {
+        console.warn('[audit] TilesRenderer snapshot update failed; using currently visible tiles.', error);
+      }
+
+      // Required synchronous WebGL render, followed immediately by a 2D canvas copy.
+      world.renderer.render(world.scene, camera);
+      context!.drawImage(source, 0, 0, sourceWidth, sourceHeight);
+
+      // Copy the just-captured WebGL frame to the persistent cache before any heat is drawn.
+      snapshotCanvas.width = sourceWidth;
+      snapshotCanvas.height = sourceHeight;
+      snapshotContext!.drawImage(canvas, 0, 0, sourceWidth, sourceHeight);
+
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+      const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+
+      const distance = Math.abs((target.y - camera.position.y) / (forward.y || -1));
+      const halfHeight = distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+      const halfWidth = halfHeight * camera.aspect;
+
+      snapshotView = {
+        centerX: target.x,
+        centerZ: target.z,
+        rightX: right.x,
+        rightZ: right.z,
+        upX: screenUp.x,
+        upZ: screenUp.z,
+        halfWidth,
+        halfHeight,
+      };
+
+      snapshotError = '';
+      console.info(
+        `[audit] cached full-corridor snapshot (${sourceWidth}×${sourceHeight}, ` +
+        `about ${(halfWidth * 2).toFixed(1)} m along × ${(halfHeight * 2).toFixed(1)} m across; ` +
+        `camera altitude ${cameraHeight.toFixed(0)} m)`,
+      );
+      return true;
+    } catch (error) {
+      snapshotError = error instanceof Error ? error.message : String(error);
+      console.warn('[audit] Could not capture the world snapshot:', error);
+      return false;
+    } finally {
+      setRevealAll(savedRevealAll);
+      world.agentsGroup.visible = savedAgentsVisible;
+      if (entityBody) entityBody.visible = savedEntityVisible;
+      // Restore the live player camera exactly as it was before the snapshot.
+      camera.position.copy(savedCamera.position);
+      camera.rotation.copy(savedCamera.rotation);
+      camera.up.copy(savedCamera.up);
+      camera.fov = savedCamera.fov;
+      camera.far = savedCamera.far;
+      camera.near = savedCamera.near;
+      camera.aspect = savedCamera.aspect;
+      camera.zoom = savedCamera.zoom;
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
+    }
   }
 
   // ---------------------------------------------------------------------------

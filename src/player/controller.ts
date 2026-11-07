@@ -126,6 +126,8 @@ export interface PlayerController {
    */
   applyImpulse(impulse: THREE.Vector3, options?: ImpulseOptions): void;
   isStunned(): boolean;
+  /** Clear stun, velocity, held keys and the daze effect (used when a run restarts). */
+  reset(): void;
   /**
    * Analogue movement from a controller: x = strafe right, z = forward, each -1..1 (deadzone already
    * applied; the length sets the top speed). `run` = L3. Works without pointer lock. Keyboard wins.
@@ -450,6 +452,12 @@ function resolveWalls(pos: THREE.Vector3): number {
       stunFromImpact(impulseOptions.impactSpeed ?? 0, impulseOptions.forceStun ?? false);
     },
     isStunned: () => stunTimer > 0,
+    reset() {
+      stunTimer = 0;
+      velocity.set(0, 0, 0);
+      keys.clear();
+      effect.reset();
+    },
     setPadInput(x, z, run) {
       padX = x;
       padZ = z;

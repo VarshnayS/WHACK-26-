@@ -376,6 +376,8 @@ class Soundscape {
 
   private volume = C.MASTER_VOLUME;
   private muted = false;
+  /** 0..1 multiplier for fades (death / pause / quit), on top of volume and mute. */
+  private fade = 1;
   private msgEl: HTMLDivElement | null = null;
   private msgTimer = 0;
 
@@ -843,7 +845,18 @@ class Soundscape {
   private applyVolume(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, ctx.currentTime, 0.05);
+    this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume * this.fade, ctx.currentTime, 0.05);
+  }
+
+  /** Fade all spatial audio to `level` (0..1) over about `seconds`. */
+  fadeTo(level: number, seconds: number): void {
+    this.fade = clamp(level, 0, 1);
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const g = this.master.gain;
+    g.cancelScheduledValues(ctx.currentTime);
+    g.setValueAtTime(g.value, ctx.currentTime);
+    g.linearRampToValueAtTime(this.muted ? 0 : this.volume * this.fade, ctx.currentTime + Math.max(0.01, seconds));
   }
 
   private show(text: string): void {
@@ -881,6 +894,11 @@ export function startSoundscape(): void {
 /** Debug: how many voices are live right now, or null before init. */
 export function getSoundscapeStats(): ReturnType<Soundscape['stats']> | null {
   return instance?.stats() ?? null;
+}
+
+/** Fade the whole soundscape to `level` (0 = silent, 1 = normal) over `seconds`. */
+export function fadeSoundscape(level: number, seconds: number): void {
+  instance?.fadeTo(level, seconds);
 }
 
 export function disposeSoundscape(): void {
