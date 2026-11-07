@@ -3,12 +3,14 @@
  *
  * Snapshot-cache audit report.
  *
- * The first time M is pressed, this module temporarily moves the shared camera to a
+ * The first time the report key is pressed, this module temporarily moves the shared camera to a
  * top-down pose, renders the already-loaded world once, and copies the WebGL canvas
  * into this module's 2D canvas. The camera is then restored immediately.
  *
  * All subsequent report drawing is 2D Canvas API work over that cached image. No
  * scene materials are replaced and no shaders are created by this module.
+ *
+ * The info panel can be minimised (button or click on its title bar) so it does not cover the map.
  *
  * Integration note: the supplied project currently stores the audit modules in
  * src/world/audit/. To activate this file while keeping it in src/audit/, update the
@@ -245,21 +247,56 @@ export function initReport(world: World): () => void {
   const snapshotContext = snapshotCanvas.getContext('2d', { alpha: false });
   if (!snapshotContext) throw new Error('[audit] Could not create the snapshot cache context.');
 
+  // --- info panel: a persistent title bar (with minimise button) above a body that is rebuilt on refresh ---
+  const PANEL_WIDTH = 'min(420px, calc(100vw - 48px))';
+
   const panel = makeElement('div', {
     position: 'absolute',
     zIndex: '2',
     top: '12px',
     left: '12px',
-    width: 'min(420px, calc(100vw - 48px))',
+    width: PANEL_WIDTH,
     boxSizing: 'border-box',
     padding: '10px 12px',
     border: '1px solid rgba(255,255,255,0.9)',
     background: 'rgba(0,0,0,0.88)',
     lineHeight: '1.5',
     pointerEvents: 'auto',
-    maxHeight: 'calc(100vh - 110px)',
+  });
+
+  const panelHeader = makeElement('div', {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    cursor: 'pointer',
+    userSelect: 'none',
+  });
+  const panelTitle = makeElement('div', { fontWeight: 'bold', fontSize: '13px' }, 'AUDIT: collision heatmap');
+  const panelToggle = styleButton(makeElement('button', {}, '–'));
+  Object.assign(panelToggle.style, { marginLeft: '0', padding: '0 9px', lineHeight: '20px' });
+  panelHeader.append(panelTitle, panelToggle);
+
+  const panelBody = makeElement('div', {
+    maxHeight: 'calc(100vh - 150px)',
     overflowY: 'auto',
   });
+  panel.append(panelHeader, panelBody);
+
+  let panelCollapsed = false;
+  function setPanelCollapsed(collapsed: boolean): void {
+    panelCollapsed = collapsed;
+    panelBody.style.display = collapsed ? 'none' : 'block';
+    panel.style.width = collapsed ? 'auto' : PANEL_WIDTH;
+    panel.style.minWidth = collapsed ? '210px' : '';
+    panelToggle.textContent = collapsed ? '+' : '–';
+    panelToggle.title = collapsed ? 'Show panel' : 'Minimise panel';
+    panelToggle.setAttribute('aria-label', panelToggle.title);
+    panelToggle.setAttribute('aria-expanded', String(!collapsed));
+  }
+  setPanelCollapsed(false);
+  // One handler on the header covers both the title bar and the button (clicks bubble up).
+  panelHeader.addEventListener('click', () => setPanelCollapsed(!panelCollapsed));
 
   const buttons = makeElement('div', {
     position: 'absolute',
@@ -331,7 +368,7 @@ export function initReport(world: World): () => void {
     const sourceWidth = Math.max(1, source.width || window.innerWidth);
     const sourceHeight = Math.max(1, source.height || window.innerHeight);
     // The report is a map of the whole playable corridor, not a view centred on
-    // wherever the player happens to be when M is pressed.
+    // wherever the player happens to be when the report opens.
     const target = new THREE.Vector3(0, 0, 0);
 
     const savedCamera = {
@@ -546,10 +583,10 @@ export function initReport(world: World): () => void {
   // ---------------------------------------------------------------------------
 
   function renderPanel(data: Aggregate): void {
-    panel.replaceChildren();
+    // Only the body is rebuilt; the title bar and minimised/expanded state persist.
+    panelBody.replaceChildren();
 
-    panel.append(
-      makeElement('div', { fontWeight: 'bold', fontSize: '13px' }, 'AUDIT: collision heatmap'),
+    panelBody.append(
       makeElement(
         'div',
         { marginTop: '3px', opacity: '0.85' },
@@ -562,7 +599,7 @@ export function initReport(world: World): () => void {
       height: '8px',
       background: 'linear-gradient(to right, #ffe61a, #ff8a00, #ff1800)',
     });
-    panel.append(legend);
+    panelBody.append(legend);
 
     const legendLabels = makeElement('div', {
       display: 'flex',
@@ -571,12 +608,12 @@ export function initReport(world: World): () => void {
       fontSize: '11px',
     });
     legendLabels.append(makeElement('span', {}, 'Few collisions'), makeElement('span', {}, 'Many collisions'));
-    panel.append(legendLabels);
+    panelBody.append(legendLabels);
 
-    panel.append(makeElement('div', { marginTop: '9px', fontWeight: 'bold' }, 'Top 5 Hotspots'));
+    panelBody.append(makeElement('div', { marginTop: '9px', fontWeight: 'bold' }, 'Top 5 Hotspots'));
 
     if (data.top.length === 0) {
-      panel.append(makeElement('div', { marginTop: '4px', opacity: '0.7' }, 'No events recorded yet. Press J to inject test events.'));
+      panelBody.append(makeElement('div', { marginTop: '4px', opacity: '0.7' }, 'No events recorded yet. Press J to inject test events.'));
     }
 
     data.top.forEach((cell, index) => {
@@ -597,10 +634,10 @@ export function initReport(world: World): () => void {
         makeElement('div', { opacity: '0.85' }, `GPS: ${lat.toFixed(5)}, ${lon.toFixed(5)}`),
         makeElement('div', { opacity: '0.75', overflowWrap: 'anywhere' }, typeSummary),
       );
-      panel.append(row);
+      panelBody.append(row);
     });
 
-    panel.append(
+    panelBody.append(
       makeElement(
         'div',
         { marginTop: '9px', opacity: '0.65', fontSize: '11px' },
@@ -638,8 +675,7 @@ export function initReport(world: World): () => void {
     } catch (error) {
       console.warn('[audit] Could not load stored audit events:', error);
       if (mine === refreshToken && open) {
-        panel.replaceChildren(
-          makeElement('div', { fontWeight: 'bold' }, 'AUDIT: collision heatmap'),
+        panelBody.replaceChildren(
           makeElement('div', { marginTop: '6px' }, 'Could not load audit events. See the console for details.'),
         );
       }
@@ -798,10 +834,6 @@ export function initReport(world: World): () => void {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
 
     if (event.code === 'KeyV') {
-      // M is also the current microphone-mute shortcut. Capture this event before the
-      // audio module's window/bubble listener so it cannot both mute and toggle the report.
-      event.preventDefault();
-      event.stopImmediatePropagation();
       setOpen(!open);
     } else if (event.code === 'KeyJ') {
       injectFakeEvents();
@@ -813,7 +845,7 @@ export function initReport(world: World): () => void {
     drawCanvas(lastAggregate);
   };
 
-  // Capture-phase listener intentionally reserves M for the audit report.
+  // Capture-phase listener intentionally reserves the report key for the audit report.
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('resize', onResize);
 

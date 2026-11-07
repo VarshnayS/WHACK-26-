@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import { world } from '../world';
+import type { AuditApi } from '../world/audit/log';
 
 /** Eye height above the ground, in metres. */
 export const PLAYER_HEIGHT = 1.7;
@@ -40,6 +41,39 @@ export interface CollisionHit {
   normal: THREE.Vector3;
   point: THREE.Vector3;
   object: THREE.Object3D | null;
+}
+
+/**
+ * The shared World interface doesn't currently declare audit.
+ * Use an optional structural extension instead of modifying world/index.ts.
+ */
+type WorldWithAudit = typeof world & {
+  audit?: Pick<AuditApi, 'log'>;
+};
+
+/**
+ * Record a confirmed player collision.
+ *
+ * Called by controller.ts after calculating the impact speed.
+ * Does not log speculative raycast hits.
+ */
+export function logCollisionHit(
+  hit: CollisionHit,
+  impactSpeed: number,
+  playerPosition: THREE.Vector3,
+): void {
+  if (!hit.blocked || !Number.isFinite(impactSpeed) || impactSpeed <= 0) {
+    return;
+  }
+
+  const audit = (world as WorldWithAudit).audit;
+
+  audit?.log({
+    position: playerPosition,
+    point: hit.point,
+    impactSpeed,
+    normal: hit.normal,
+  });
 }
 
 // ---------------------------------------------------------------------------
