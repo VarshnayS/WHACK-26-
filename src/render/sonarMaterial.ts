@@ -9,6 +9,9 @@
  *   - pings: each active ping (src/render/pings.ts fills the uniforms from world.activePings())
  *     draws an expanding ring with a fading trail behind it, clipped to its range. The ring's look
  *     comes from the ping's style (speed, thickness, brightness, fade);
+ *   - vision (world.vision, src/senses/vision.ts): surfaces within visibleDistance inside the gaze
+ *     cone (minus a central blind spot) are always visible; low acuity keeps only the coarse grid
+ *     beyond visibleDistance * acuity. Total blindness (the default) shows nothing;
  *   - reveal all (R, setRevealAll): the full grid everywhere, no mask.
  *
  * Grid: lines are drawn only along the axes tangent to the surface (an axis whose grid planes are
@@ -20,23 +23,20 @@
  * should use createSonarMaterial({ gridSpace: 'object' }): the grid is fixed to the object, so lines
  * travel with it instead of sliding over it. InstancedMesh is supported in both modes.
  *
- * White on black only: never output colour.
+ * White on black, with ONE exception (AGENTS.md rule 9): red is allowed for stuns and danger.
+ * A ping with a colour (uPingC, from src/render/pingColors.ts; 'impact' = red) tints the lines it
+ * reveals; it overrides white, so it still shows during reveal-all (R) and inside other reveals.
  */
 import * as THREE from 'three';
 import { MAX_PINGS } from '../shared/contracts';
-import { ARM_REACH, EYE_HEIGHT, GRID_SIZE, WAVE_SPEED } from '../config';
+import { ARM_REACH, EYE_HEIGHT, GRID_SIZE } from '../config';
 
 export { MAX_PINGS };
-
-/** A ping start time this far in the past means "slot unused" (legacy uPingStart only). */
-export const PING_UNUSED = -1e6;
 
 /** Coarse grid spacing as a multiple of the grid size (shown where the fine grid fades out). */
 const GRID_COARSE = 4;
 /** Brightness of the coarse grid relative to the fine grid. */
 const GRID_COARSE_LEVEL = 0.6;
-/** Trail brightness relative to the ring, right behind it (then decays with the ping's fade). */
-const TRAIL_LEVEL = 0.35;
 /** Arm's reach glow fades in from this fraction of uArmReach. */
 const ARM_REACH_SOFT = 0.5;
 
@@ -54,19 +54,20 @@ export type SonarUniforms = {
   uPingA: THREE.IUniform<THREE.Vector4[]>;
   /** Per ping: x = range (m), y = ring thickness (m), z = brightness 0..1, w = trail fade per metre. */
   uPingB: THREE.IUniform<THREE.Vector4[]>;
+  /** Per ping: rgb = colour (white, or red for stuns/danger), w = trail level behind the ring. */
+  uPingC: THREE.IUniform<THREE.Vector4[]>;
   /** 1 = debug "reveal everything" (R key): full grid, no sonar mask. */
   uRevealAll: THREE.IUniform<number>;
-  /**
-   * @deprecated Legacy ping layout, still read by src/world/agentMaterial.ts until it switches to
-   * createSonarMaterial({ gridSpace: 'object' }). Filled so its rings line up with the real ones.
-   */
-  uWaveSpeed: THREE.IUniform<number>;
-  /** @deprecated see uWaveSpeed */
-  uPingOrigin: THREE.IUniform<THREE.Vector3[]>;
-  /** @deprecated see uWaveSpeed */
-  uPingStart: THREE.IUniform<number[]>;
-  /** @deprecated see uWaveSpeed */
-  uPingRange: THREE.IUniform<number[]>;
+  /** Vision: always-visible distance (m), 0 = blind. */
+  uVisDist: THREE.IUniform<number>;
+  /** Vision: half-angle of the visible cone around the gaze (radians). */
+  uVisOuter: THREE.IUniform<number>;
+  /** Vision: half-angle of the central blind spot (radians), 0 = none. */
+  uVisInner: THREE.IUniform<number>;
+  /** Vision: sharpness 0..1. */
+  uVisAcuity: THREE.IUniform<number>;
+  /** Camera forward (world space, unit). */
+  uViewDir: THREE.IUniform<THREE.Vector3>;
 };
 
 export const sonarUniforms: SonarUniforms = {
@@ -78,11 +79,13 @@ export const sonarUniforms: SonarUniforms = {
   uPingCount: { value: 0 },
   uPingA: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector4()) },
   uPingB: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector4()) },
+  uPingC: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector4()) },
   uRevealAll: { value: 0 },
-  uWaveSpeed: { value: WAVE_SPEED },
-  uPingOrigin: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector3()) },
-  uPingStart: { value: new Array<number>(MAX_PINGS).fill(PING_UNUSED) },
-  uPingRange: { value: new Array<number>(MAX_PINGS).fill(0) },
+  uVisDist: { value: 0 },
+  uVisOuter: { value: 0 },
+  uVisInner: { value: 0 },
+  uVisAcuity: { value: 0 },
+  uViewDir: { value: new THREE.Vector3(0, 0, -1) },
 };
 
 const vertexShader = /* glsl */ `
@@ -114,7 +117,13 @@ const fragmentShader = /* glsl */ `
   uniform int uPingCount;
   uniform vec4 uPingA[MAX_PINGS];
   uniform vec4 uPingB[MAX_PINGS];
+  uniform vec4 uPingC[MAX_PINGS];
   uniform float uRevealAll;
+  uniform float uVisDist;
+  uniform float uVisOuter;
+  uniform float uVisInner;
+  uniform float uVisAcuity;
+  uniform vec3 uViewDir;
   varying vec3 vWorldPos;
   varying vec3 vGridPos;
 
@@ -135,7 +144,26 @@ const fragmentShader = /* glsl */ `
     // flat face normal from screen-space derivatives (no normal attribute needed)
     vec3 n = normalize(cross(dFdx(vGridPos), dFdy(vGridPos)));
     vec3 gp = vGridPos / uGridSize;
-    float grid = max(sonarGrid(gp, n), sonarGrid(gp * (1.0 / GRID_COARSE), n) * GRID_COARSE_LEVEL);
+    float gFine = sonarGrid(gp, n);
+    float gCoarse = sonarGrid(gp * (1.0 / GRID_COARSE), n) * GRID_COARSE_LEVEL;
+    float grid = max(gFine, gCoarse);
+
+    // vision: always-visible surfaces inside the gaze cone, minus the central blind spot
+    float visionLum = 0.0;
+    if (uVisDist > 0.0) {
+      vec3 toP = vWorldPos - cameraPosition;
+      float dist = length(toP);
+      float ang = acos(clamp(dot(toP / max(dist, 1e-4), uViewDir), -1.0, 1.0));
+      float soft = 0.035; // ~2 degrees
+      float inCone = 1.0 - smoothstep(uVisOuter - soft, uVisOuter + soft, ang);
+      float outSpot = uVisInner > 0.0 ? smoothstep(uVisInner - soft, uVisInner + soft, ang) : 1.0;
+      float near = 1.0 - smoothstep(uVisDist * 0.55, uVisDist, dist);
+      // low acuity = blur: fine lines only close up, then just the coarse grid
+      float fineReach = uVisDist * uVisAcuity;
+      float fineW = 1.0 - smoothstep(fineReach * 0.6, fineReach + 0.01, dist);
+      float g = max(gFine * fineW, gCoarse);
+      visionLum = g * inCone * outSpot * near * (0.15 + 0.6 * uVisAcuity);
+    }
 
     float reveal = uRevealAll;
 
@@ -145,8 +173,12 @@ const fragmentShader = /* glsl */ `
     float dBody = length(toEye + vec3(0.0, below, 0.0));
     reveal = max(reveal, 1.0 - smoothstep(uArmReach * ARM_REACH_SOFT, uArmReach, dBody));
 
+    // coloured pings (red = stun/danger): strongest one wins, and it overrides white
+    float tintAmt = 0.0;
+    vec3 tint = vec3(1.0);
+
     for (int i = 0; i < MAX_PINGS; i++) {
-      if (i >= uPingCount || reveal >= 1.0) break;
+      if (i >= uPingCount || (reveal >= 1.0 && tintAmt >= 1.0)) break;
       vec4 a = uPingA[i]; // origin, radius
       vec4 b = uPingB[i]; // range, thickness, brightness, fade per metre
       float d = distance(vWorldPos, a.xyz);
@@ -154,13 +186,22 @@ const fragmentShader = /* glsl */ `
       float x = d - a.w; // > 0: the wave hasn't got here yet
       // crisp leading edge, softer back edge
       float ring = 1.0 - smoothstep(0.0, x > 0.0 ? b.y * 0.2 : b.y, abs(x));
-      float trail = x < 0.0 ? TRAIL_LEVEL * exp(x * b.w) : 0.0;
+      vec4 c = uPingC[i];
+      float trail = x < 0.0 ? c.w * exp(x * b.w) : 0.0;
       float edge = 1.0 - smoothstep(b.x * 0.8, b.x, d); // soft clip at the range
       float falloff = 1.0 - 0.5 * d / b.x;               // the wave weakens as it spreads
-      reveal = max(reveal, max(ring, trail) * b.z * edge * falloff);
+      float v = max(ring, trail) * b.z * edge * falloff;
+      if (c.r + c.g + c.b < 2.99) { // coloured (not white)
+        if (v > tintAmt) { tintAmt = v; tint = c.rgb; }
+      } else {
+        reveal = max(reveal, v);
+      }
     }
 
-    gl_FragColor = vec4(vec3(grid * min(reveal, 1.0)), 1.0);
+    tintAmt = min(tintAmt, 1.0);
+    float white = max(grid * min(reveal, 1.0), visionLum);
+    vec3 col = mix(vec3(white), grid * tint, tintAmt);
+    gl_FragColor = vec4(col, 1.0);
   }
 `;
 
@@ -190,7 +231,6 @@ export function createSonarMaterial(options: SonarMaterialOptions = {}): THREE.S
     MAX_PINGS,
     GRID_COARSE: GRID_COARSE.toFixed(1),
     GRID_COARSE_LEVEL: GRID_COARSE_LEVEL.toFixed(2),
-    TRAIL_LEVEL: TRAIL_LEVEL.toFixed(2),
     ARM_REACH_SOFT: ARM_REACH_SOFT.toFixed(2),
   };
   if (gridSpace === 'object') defines.OBJECT_GRID = 1;
@@ -207,12 +247,29 @@ export function createSonarMaterial(options: SonarMaterialOptions = {}): THREE.S
 /** The one material every tile uses (world-space grid). */
 export const sonarMaterial = createSonarMaterial({ name: 'sonar' });
 
-/** Debug: show the full grid everywhere (R key), for checking alignment. */
+const revealAllListeners = new Set<(on: boolean) => void>();
+
+/**
+ * Debug: show the full grid everywhere (R key), for checking alignment. Pings still draw on top, so
+ * red impacts show in reveal-all too. Every tile and agent uses this material, so nothing is swapped.
+ */
 export function setRevealAll(on: boolean): void {
+  if (on === isRevealAll()) return;
   sonarUniforms.uRevealAll.value = on ? 1 : 0;
+  for (const fn of revealAllListeners) fn(on);
 }
 
 /** True while reveal-all is on. */
 export function isRevealAll(): boolean {
   return sonarUniforms.uRevealAll.value > 0.5;
+}
+
+export function toggleRevealAll(): void {
+  setRevealAll(!isRevealAll());
+}
+
+/** Called whenever reveal-all changes (e.g. the corridor outline in src/world/debugKeys.ts). Returns unsubscribe. */
+export function onRevealAllChange(fn: (on: boolean) => void): () => void {
+  revealAllListeners.add(fn);
+  return () => revealAllListeners.delete(fn);
 }

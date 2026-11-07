@@ -28,10 +28,26 @@ import { getTiles } from './tiles';
 export const GROUND_CELL = 2;
 /** The grid extends this far beyond the walls so clamped agents never sample outside it. */
 const GRID_PAD = 2;
-/** CPU time per frame spent probing nodes while a grid is being built (ms). */
+/** CPU time per frame spent probing nodes while a grid is being built (ms), during play. */
 const BUILD_BUDGET_MS = 3;
+/** Current per-frame budget: the start screen raises it while nobody is playing (setGroundBuildBudget). */
+let buildBudgetMs = BUILD_BUDGET_MS;
+
+/**
+ * Loading mode (start screen up): a big per-frame budget and a short settle wait, so the grid is
+ * ready ~seconds sooner. Off = the in-game defaults (no hitches while playing).
+ */
+export function setGroundLoading(on: boolean): void {
+  buildBudgetMs = on ? LOADING_BUDGET_MS : BUILD_BUDGET_MS;
+  settleMs = on ? LOADING_SETTLE_MS : SETTLE_MS;
+}
 /** Wait this long after the last tiles-load-end before (re)building, so loading has settled (ms). */
 const SETTLE_MS = 1500;
+/** Same, while the start screen is up (setGroundLoading): nobody is moving, so tiles settle fast. */
+const LOADING_SETTLE_MS = 400;
+/** Probing budget per frame while the start screen is up (ms): nobody is playing, frame rate doesn't matter. */
+const LOADING_BUDGET_MS = 24;
+let settleMs = SETTLE_MS;
 
 /** (x, z, y of the previous neighbour's ground) -> ground height, or null when there is none. */
 export type GroundProbe = (x: number, z: number, guessY: number) => number | null;
@@ -187,6 +203,17 @@ export function isGroundReady(): boolean {
   return current !== null;
 }
 
+/**
+ * For the loading screen: `settled` = a grid exists, no rebuild is pending or running (so it was built
+ * from the tiles as they are now). `progress` 0..1 of the build in progress (1 when settled).
+ */
+export function groundStatus(): { ready: boolean; settled: boolean; progress: number; pending: boolean } {
+  const ready = current !== null;
+  const pending = dirtyAt >= 0;
+  const progress = building ? building.done / building.total : ready ? 1 : 0;
+  return { ready, settled: ready && !pending && !building, progress, pending };
+}
+
 /** Number of ground-grid builds finished so far (agents re-snap when this changes). */
 let generation = 0;
 export function groundGeneration(): number {
@@ -197,6 +224,7 @@ export function groundGeneration(): number {
 export function rebuildGroundField(): void {
   building = new HeightGridBuilder(tileProbe);
   buildStarted = performance.now();
+  performance.mark('ground:build-start');
 }
 
 /**
@@ -217,14 +245,15 @@ export function initGroundField(): void {
   });
 
   world.onUpdate(() => {
-    if (dirtyAt >= 0 && performance.now() - dirtyAt >= SETTLE_MS) {
+    if (dirtyAt >= 0 && performance.now() - dirtyAt >= settleMs) {
       dirtyAt = -1;
       rebuildGroundField();
     }
     if (!building) return;
-    if (building.step(BUILD_BUDGET_MS)) {
+    if (building.step(buildBudgetMs)) {
       current = building.grid;
       generation++;
+      performance.mark('ground:ready');
       console.info(
         `[ground] height grid ready: ${current.nAlong}x${current.nAcross} nodes every ${GROUND_CELL} m, ` +
           `${building.holes} without ground, ${(performance.now() - buildStarted).toFixed(0)} ms`,

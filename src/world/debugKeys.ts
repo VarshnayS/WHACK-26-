@@ -14,7 +14,7 @@
  * separate element from the HUD (owner C) and never covers the attribution.
  */
 import { world } from './index';
-import { isRevealAll, onRevealAllChange, toggleRevealAll } from './debugMaterial';
+import { isRevealAll, onRevealAllChange, toggleRevealAll } from '../render/sonarMaterial';
 import { initDebugCamera, isDebugCameraActive, toggleDebugCamera } from './debugCamera';
 import { getGroundOffset, getTileStats } from './tiles';
 import { createPlayAreaOutline, isInsidePlayArea, toCorridor } from './playArea';
