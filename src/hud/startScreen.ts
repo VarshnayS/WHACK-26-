@@ -5,8 +5,8 @@
  * START: an opaque white-on-black screen (title, "Click to begin", one line of controls, the vision
  * picker) hides the load. Behind it we wait for: OSM agents spawned, tiles loaded
  * (3d-tiles-renderer loadProgress = 1) and the ground height grid built from those tiles
- * (src/world/heightField.ts). Meanwhile the grid gets a large per-frame budget, since nobody is
- * playing yet. "Click to begin" starts the audio engine (startAudio, inside the click: autoplay
+ * (src/world/heightField.ts). Meanwhile the grid builds in loading mode (big per-frame budget, short
+ * settle wait), since nobody is playing yet. "Click to begin" starts the audio engine (startAudio, inside the click: autoplay
  * rule) and locks the pointer. If loading stalls (e.g. an offline cache miss), begin is allowed
  * anyway after BEGIN_ANYWAY_S.
  *
@@ -19,12 +19,10 @@ import { world } from '../world';
 import { startAudio } from '../audio';
 import { getPlayerController } from '../player/controller';
 import { getTileStats } from '../world/tiles';
-import { groundStatus, setGroundBuildBudget } from '../world/heightField';
+import { groundStatus, setGroundLoading } from '../world/heightField';
 import { initVision } from '../senses/vision';
 import { createVisionPicker } from '../senses/visionPicker';
 
-/** Ground grid probing budget while the start screen is up (ms per frame). */
-const LOADING_GROUND_BUDGET_MS = 24;
 /** Everything must stay ready this long before "Click to begin" lights up (ms): tiles can restart loading. */
 const READY_HOLD_MS = 400;
 /** After this long, begin is allowed even if loading never finished (s). */
@@ -46,7 +44,6 @@ export interface StartupReport {
   ready: number | null;
   begin: number | null;
   tileRequests: number;
-  tileBytes: number;
   /** Main-thread tasks over 50 ms before ready: count, total and the largest (ms). */
   longTasks: { count: number; totalMs: number; largest: { start: number; duration: number }[] };
 }
@@ -62,7 +59,6 @@ const report: StartupReport = {
   ready: null,
   begin: null,
   tileRequests: 0,
-  tileBytes: 0,
   longTasks: { count: 0, totalMs: 0, largest: [] },
 };
 const longTasks: { start: number; duration: number }[] = [];
@@ -90,7 +86,6 @@ function finishReport(): void {
     .getEntriesByType('resource')
     .filter((e) => e.name.includes('/3dtiles/')) as PerformanceResourceTiming[];
   report.tileRequests = tiles.length;
-  report.tileBytes = tiles.reduce((n, e) => n + (e.transferSize || e.decodedBodySize || 0), 0);
   const before = longTasks.filter((t) => report.ready === null || t.start < report.ready);
   report.longTasks = {
     count: before.length,
@@ -100,8 +95,8 @@ function finishReport(): void {
   const f = (v: number | null) => (v === null ? '-' : `${(v / 1000).toFixed(2)} s`);
   console.info(
     `[startup] hud ${f(report.hudInit)} | osm ${f(report.osmLoaded)} | agents ${f(report.agentsReady)} | ` +
-      `first tile ${f(report.firstTile)} | tiles loaded ${f(report.tilesLoaded)} (${report.tileRequests} requests, ` +
-      `${(report.tileBytes / 1e6).toFixed(1)} MB) | ground grid ${f(report.groundBuildStart)} -> ${f(report.groundReady)} | ` +
+      `first tile ${f(report.firstTile)} | tiles loaded ${f(report.tilesLoaded)} (${report.tileRequests} requests) | ` +
+      `ground grid ${f(report.groundBuildStart)} -> ${f(report.groundReady)} | ` +
       `ready ${f(report.ready)} | long tasks ${report.longTasks.count} = ${report.longTasks.totalMs} ms ` +
       `(largest ${report.longTasks.largest.map((t) => `${Math.round(t.duration)} ms @ ${(t.start / 1000).toFixed(1)} s`).join(', ')})`,
   );
@@ -124,7 +119,7 @@ export function initStartScreen(hud: HTMLElement): void {
     /* long task timing unsupported */
   }
   initVision(world); // so the picker works before src/senses/ initialises (after the OSM load)
-  setGroundBuildBudget(LOADING_GROUND_BUDGET_MS);
+  setGroundLoading(true);
 
   const el = document.createElement('div');
   overlay = el;
@@ -199,7 +194,7 @@ export function initStartScreen(hud: HTMLElement): void {
       if (!canBegin) return;
       startAudio(); // inside the click: browsers only allow audio to start from a gesture
       report.begin = performance.now();
-      setGroundBuildBudget(); // back to the in-game budget
+      setGroundLoading(false); // back to the in-game budget
       if (report.ready === null) finishReport(); // "begin anyway" path
     } else {
       startAudio(); // resume if the browser suspended it

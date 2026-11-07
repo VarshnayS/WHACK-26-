@@ -33,12 +33,21 @@ const BUILD_BUDGET_MS = 3;
 /** Current per-frame budget: the start screen raises it while nobody is playing (setGroundBuildBudget). */
 let buildBudgetMs = BUILD_BUDGET_MS;
 
-/** Per-frame probing budget in ms; pass nothing to restore the in-game default. */
-export function setGroundBuildBudget(ms: number = BUILD_BUDGET_MS): void {
-  buildBudgetMs = Math.max(1, ms);
+/**
+ * Loading mode (start screen up): a big per-frame budget and a short settle wait, so the grid is
+ * ready ~seconds sooner. Off = the in-game defaults (no hitches while playing).
+ */
+export function setGroundLoading(on: boolean): void {
+  buildBudgetMs = on ? LOADING_BUDGET_MS : BUILD_BUDGET_MS;
+  settleMs = on ? LOADING_SETTLE_MS : SETTLE_MS;
 }
 /** Wait this long after the last tiles-load-end before (re)building, so loading has settled (ms). */
 const SETTLE_MS = 1500;
+/** Same, while the start screen is up (setGroundLoading): nobody is moving, so tiles settle fast. */
+const LOADING_SETTLE_MS = 400;
+/** Probing budget per frame while the start screen is up (ms): nobody is playing, frame rate doesn't matter. */
+const LOADING_BUDGET_MS = 24;
+let settleMs = SETTLE_MS;
 
 /** (x, z, y of the previous neighbour's ground) -> ground height, or null when there is none. */
 export type GroundProbe = (x: number, z: number, guessY: number) => number | null;
@@ -236,7 +245,7 @@ export function initGroundField(): void {
   });
 
   world.onUpdate(() => {
-    if (dirtyAt >= 0 && performance.now() - dirtyAt >= SETTLE_MS) {
+    if (dirtyAt >= 0 && performance.now() - dirtyAt >= settleMs) {
       dirtyAt = -1;
       rebuildGroundField();
     }
