@@ -6,8 +6,9 @@
  * The AudioListener follows the camera position and orientation every frame. Sources:
  *   - CARS: procedural engine (detuned saws + sub, low-passed, rough AM) + tyre/road noise; pitch and
  *     level follow speed, with an (exaggerated) Doppler shift as they pass. Nearest MAX_CAR_VOICES.
- *   - PEDESTRIANS: soft footstep taps synced to their walk cycle (each 'pedestrian' ping that
- *     agents.ts fires on a step plays one), and murmured conversation in groups: a voiced source through
+ *   - PEDESTRIANS: soft footstep taps synced to their walk cycle (onPedestrianStep from
+ *     src/world/soundSources.ts, at the step itself; the faint ping follows 0.3–0.5 s later like an
+ *     echo), and murmured conversation in groups: a voiced source through
  *     moving formant filters with syllable envelopes; group members take turns.
  *   - PLAYER: own footsteps / idle shuffle (from the 'footstep' pings of src/senses/footsteps.ts),
  *     cane taps (from 'cane' pings), a heavy thud + ear ringing on world 'stunned'.
@@ -26,6 +27,7 @@ import type { StunnedPayload } from '../player/controller';
 import * as C from './soundscapeConfig';
 import type { SfxName } from './soundscapeConfig';
 import { brownNoise, renderOneShots, whiteNoise } from './synth';
+import { onPedestrianStep } from '../world/soundSources';
 
 // --- small helpers ------------------------------------------------------------------------------
 
@@ -382,6 +384,7 @@ class Soundscape {
   private entityNextStep = 0;
   private entityLimp = 1;
   private readonly chatty = new WeakMap<Agent, boolean>();
+  private offStep: (() => void) | null = null;
 
   private readonly listenerPos = new THREE.Vector3();
   private readonly lastListenerPos = new THREE.Vector3();
@@ -407,6 +410,7 @@ class Soundscape {
     window.addEventListener('keydown', this.onKeyDown);
     this.world.on('stunned', this.onStunned);
     this.world.onUpdate(this.update);
+    this.offStep = onPedestrianStep(this.onPedStep);
   }
 
   dispose(): void {
@@ -414,6 +418,7 @@ class Soundscape {
     window.removeEventListener('keydown', this.onGesture, true);
     window.removeEventListener('keydown', this.onKeyDown);
     this.world.off('stunned', this.onStunned);
+    this.offStep?.();
     this.msgEl?.remove();
     void this.ctx?.close().catch(() => undefined);
     this.ctx = null;
@@ -648,13 +653,17 @@ class Soundscape {
         this.playAt('cane', p.origin, C.CANE_GAIN * lerp(1, 2.2, hard));
         return;
       }
-      case 'pedestrian':
-        if (d <= C.PED_STEP_RADIUS) this.playAt('pedStep', p.origin, C.PED_STEP_GAIN * clamp(p.range / 3.5, 0.5, 1));
-        return;
       default:
         return;
     }
   }
+
+  /** A pedestrian put a foot down (heard at once; its ping comes later). */
+  private readonly onPedStep = (agent: Agent, speed: number): void => {
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    if (agent.position.distanceToSquared(this.listenerPos) > C.PED_STEP_RADIUS * C.PED_STEP_RADIUS) return;
+    this.playAt('pedStep', agent.position, C.PED_STEP_GAIN * clamp(speed / 1.6, 0.5, 1));
+  };
 
   private assignCars(): void {
     const lp = this.listenerPos;

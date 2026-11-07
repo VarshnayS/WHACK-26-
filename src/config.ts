@@ -67,6 +67,32 @@ export const CAMERA_FAR = 3000;
 /** Where `npm run setup:draco` copies three's Draco decoder (served by Vite from public/). */
 export const DRACO_PATH = '/draco/';
 
+// =============================================================================================
+// REVEAL TUNING: how much of the world each sound reveals. Tune here (used by src/world/,
+// src/audio/ and src/render/).
+// =============================================================================================
+
+/** Pedestrians only make footstep pings within this distance of the player (m). You still HEAR their steps further away. */
+export const PED_PING_RADIUS = 10;
+/** Range of one pedestrian footstep ping (m). */
+export const PED_PING_RANGE = 1.5;
+/** Brightness 0..1 of pedestrian pings (faint). */
+export const PED_PING_BRIGHTNESS = 0.2;
+/** A pedestrian's ping arrives this long after its footstep sound (s, random in the range), like an echo. */
+export const PED_PING_ECHO_DELAY_MIN = 0.3;
+export const PED_PING_ECHO_DELAY_MAX = 0.5;
+
+/** Voice ping range for a whisper (quietest sound that triggers) and a shout (loudest) (m). */
+export const VOICE_RANGE_WHISPER = 2;
+export const VOICE_RANGE_SHOUT = 20;
+/** How fast the voice trail fades after the wave passes (1/s): higher = the street goes dark sooner. */
+export const VOICE_FADE = 2.2;
+/** Voice trail brightness behind the ring, relative to the ring (other pings: 0.35). Lower = dimmer trail. */
+export const VOICE_TRAIL_LEVEL = 0.18;
+
+/** Car engine pings never reach further than this (m); below it they are unchanged. */
+export const CAR_PING_RANGE_MAX = 12;
+
 /** Range in metres of the debug test ping fired with Space. */
 export const TEST_PING_RANGE = 40;
 

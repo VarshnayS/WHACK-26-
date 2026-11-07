@@ -10,6 +10,8 @@
  *   OnsetDetector.step(features, nowMs)        -> 0..n DetectionEvents
  */
 
+import { VOICE_RANGE_SHOUT, VOICE_RANGE_WHISPER } from '../config';
+
 export type DetectionKind = 'transient' | 'sustained';
 
 // =============================================================================================
@@ -33,11 +35,11 @@ export const FIXED_RANGE_DB = 40;
 /** Response curve: < 1 makes quiet/medium sounds give bigger pulses, 1 = linear. */
 export const STRENGTH_CURVE = 0.7;
 /**
- * Smallest / largest pulse reach in metres: a whisper just over the trigger reveals ~3 m,
- * a full shout ~40 m (the voice ping's range in world.ping).
+ * Smallest / largest pulse reach in metres (the voice ping's range in world.ping): a whisper just
+ * over the trigger, a full shout. Set in REVEAL TUNING (src/config.ts).
  */
-export const MIN_RADIUS_M = 3;
-export const MAX_RADIUS_M = 40;
+export const MIN_RADIUS_M = VOICE_RANGE_WHISPER;
+export const MAX_RADIUS_M = VOICE_RANGE_SHOUT;
 
 /** Every tunable for the audio -> sonar module lives here (README "Audio sonar"). */
 export interface DetectorConfig {

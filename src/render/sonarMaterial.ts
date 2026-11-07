@@ -37,8 +37,6 @@ export const PING_UNUSED = -1e6;
 const GRID_COARSE = 4;
 /** Brightness of the coarse grid relative to the fine grid. */
 const GRID_COARSE_LEVEL = 0.6;
-/** Trail brightness relative to the ring, right behind it (then decays with the ping's fade). */
-const TRAIL_LEVEL = 0.35;
 /** Arm's reach glow fades in from this fraction of uArmReach. */
 const ARM_REACH_SOFT = 0.5;
 
@@ -56,7 +54,7 @@ export type SonarUniforms = {
   uPingA: THREE.IUniform<THREE.Vector4[]>;
   /** Per ping: x = range (m), y = ring thickness (m), z = brightness 0..1, w = trail fade per metre. */
   uPingB: THREE.IUniform<THREE.Vector4[]>;
-  /** Per ping: rgb = colour, w = 1 if coloured (red for stuns/danger), 0 = plain white. */
+  /** Per ping: rgb = colour (white, or red for stuns/danger), w = trail level behind the ring. */
   uPingC: THREE.IUniform<THREE.Vector4[]>;
   /** 1 = debug "reveal everything" (R key): full grid, no sonar mask. */
   uRevealAll: THREE.IUniform<number>;
@@ -164,12 +162,12 @@ const fragmentShader = /* glsl */ `
       float x = d - a.w; // > 0: the wave hasn't got here yet
       // crisp leading edge, softer back edge
       float ring = 1.0 - smoothstep(0.0, x > 0.0 ? b.y * 0.2 : b.y, abs(x));
-      float trail = x < 0.0 ? TRAIL_LEVEL * exp(x * b.w) : 0.0;
+      vec4 c = uPingC[i];
+      float trail = x < 0.0 ? c.w * exp(x * b.w) : 0.0;
       float edge = 1.0 - smoothstep(b.x * 0.8, b.x, d); // soft clip at the range
       float falloff = 1.0 - 0.5 * d / b.x;               // the wave weakens as it spreads
       float v = max(ring, trail) * b.z * edge * falloff;
-      vec4 c = uPingC[i];
-      if (c.w > 0.5) {
+      if (c.r + c.g + c.b < 2.99) { // coloured (not white)
         if (v > tintAmt) { tintAmt = v; tint = c.rgb; }
       } else {
         reveal = max(reveal, v);
@@ -208,7 +206,6 @@ export function createSonarMaterial(options: SonarMaterialOptions = {}): THREE.S
     MAX_PINGS,
     GRID_COARSE: GRID_COARSE.toFixed(1),
     GRID_COARSE_LEVEL: GRID_COARSE_LEVEL.toFixed(2),
-    TRAIL_LEVEL: TRAIL_LEVEL.toFixed(2),
     ARM_REACH_SOFT: ARM_REACH_SOFT.toFixed(2),
   };
   if (gridSpace === 'object') defines.OBJECT_GRID = 1;
