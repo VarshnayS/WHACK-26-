@@ -6,6 +6,8 @@
  * step rate (one step per STEP_LENGTH_* metres travelled). Standing still, a faint ~1.5 m pulse
  * (breathing, shuffling) fires every ~4 s so the ground under you never disappears completely.
  * The soundscape (src/audio/soundscape.ts) hears these pings and plays the matching footstep sound.
+ * getStepProgress() exposes the step count and how far through the current step the player is, so
+ * the cane's auto-sweep (src/senses/cane.ts) can touch down in rhythm with the feet.
  * Tuning: src/senses/config.ts.
  */
 import * as THREE from 'three';
@@ -27,6 +29,21 @@ import {
 
 const feet = new THREE.Vector3();
 let initialised = false;
+
+/** Where the player is in their stride. Read-only outside this file. */
+export interface StepProgress {
+  /** Steps taken so far. Even = right foot, odd = left foot. */
+  count: number;
+  /** 0..1 through the current step (0 = the foot just landed). Frozen while standing still. */
+  phase: number;
+  /** True while walking (above STEP_MIN_SPEED and not stunned). */
+  moving: boolean;
+}
+const progress: StepProgress = { count: 0, phase: 0, moving: false };
+
+export function getStepProgress(): Readonly<StepProgress> {
+  return progress;
+}
 
 function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x;
@@ -53,6 +70,7 @@ export function initFootsteps(world: World): void {
     const speed = controller.getSpeed();
 
     if (speed < STEP_MIN_SPEED || controller.isStunned()) {
+      progress.moving = false;
       idle += dt;
       if (idle >= IDLE_PULSE_INTERVAL) {
         idle = 0;
@@ -67,7 +85,10 @@ export function initFootsteps(world: World): void {
     const stepLength = STEP_LENGTH_WALK + (STEP_LENGTH_RUN - STEP_LENGTH_WALK) * run;
     if (stride >= stepLength) {
       stride = 0;
+      progress.count++;
       fire(STEP_RANGE_WALK + (STEP_RANGE_RUN - STEP_RANGE_WALK) * run);
     }
+    progress.moving = true;
+    progress.phase = Math.min(1, stride / stepLength);
   });
 }

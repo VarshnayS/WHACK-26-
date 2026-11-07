@@ -100,6 +100,8 @@ export const PLAYER_SHUFFLE_GAIN = 0.18;
 /** A footstep ping with range at or below this (m) is the idle shuffle. */
 export const SHUFFLE_MAX_RANGE = 2;
 export const CANE_GAIN = 0.6;
+/** Auto-sweep touch-down tick (two-point touch), much softer than a contact tap. */
+export const CANE_TOUCH_GAIN = 0.15;
 export const THUD_GAIN = 1;
 /** Ear ringing after a stun: level and pitch (Hz). */
 export const TINNITUS_GAIN = 0.03;

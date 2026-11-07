@@ -70,29 +70,40 @@ Check the proxy works by opening http://localhost:8787/v1/3dtiles/root.json. You
 
 ### Controls
 
-| Key | Action |
-|---|---|
-| Click to begin | On the start screen: starts the audio engine and the mic (browser permission prompt, then ~1.5 s calibration: stay quiet) and locks the mouse |
-| Mouse | Look around (click the scene to re-lock after Esc) |
-| WASD | Walk (speed builds up the longer you hold a key) |
-| Speak / clap / shout | Voice sonar: a whisper reveals ~2 m, a shout ~20 m |
-| Space / Shift+Space | Medium / max-strength voice ping (works with no mic) |
-| C or hold right mouse | Hold to sweep the white cane; it taps on contact (small ping + sound) |
-| V (cane held) | Hard cane tap: a bigger 4 m ping |
-| O | Vision picker (blindness scale); O again or Resume to go back |
-| U | Mute / unmute the soundscape |
-| , / . | Sound volume down / up (saved per browser) |
-| M | Architect report (coming from AUDIT) |
-| Shift+M | Mute / unmute the mic |
-| Shift+C | Recalibrate the mic noise floor |
-| [ / ] | Mic sensitivity down / up (pulse size; saved per browser) |
-| - / = | Mic trigger level down / up (dB above room noise; saved per browser) |
-| 0 | Reset mic tuning to the defaults |
-| ` (backtick) | Audio debug meter |
-| R | Debug: reveal everything (full grid on the real material; pings and red still draw on top) |
-| F | Debug: free-fly camera (E/Q up/down, Shift fast, G back to eye height) |
-| P / Shift+P | Dev builds only: fake ping of the next type / one of each type ahead |
-| Esc | Release the mouse |
+A controller works too (Gamepad API, tested in Chrome): plug it in and press any button. The mapping lives in one table, `src/player/gamepadConfig.ts`. A button sends the same key event as its key, so it does exactly the same thing. **LT+** means hold LT (the controller's Shift layer).
+
+| Key | Controller | Action |
+|---|---|---|
+| Click to begin | (click once) | On the start screen: starts the audio engine and the mic (browser permission prompt, then ~1.5 s calibration: stay quiet) and locks the mouse |
+| Mouse | Right stick | Look around (click the scene to re-lock after Esc) |
+| WASD | Left stick | Walk (speed builds up the longer you hold a key; the stick's push sets the top speed) |
+| Hold Shift | L3 (toggle) | Run (up to 5.5 m/s instead of 1.8). L3 turns off when you let go of the stick |
+| Speak / clap / shout | | Voice sonar: a whisper reveals ~2 m, a shout ~20 m |
+| Space | B | Medium voice ping (works with no mic) |
+| Shift+Space | X | Max-strength voice ping |
+| Hold C or right mouse | Hold RT | Sweep the white cane by hand |
+| X | Y | Auto-sweep on / off (on by default): two-point touch in rhythm with your steps |
+| B | A | Hard cane tap: a bigger 6 m ping |
+| H | LT+X | Haptics test: each press plays the next level (cane tap, light knock, mid stun, full stun, car hit) and shows its values |
+| V | View | Architect hotspot map (AUDIT) |
+| J | LT+View | Audit: inject test events |
+| O | Menu | Vision picker (blindness scale); O again or Resume to go back |
+| | LB / RB | Previous / next vision mode |
+| U | D-pad ← | Mute / unmute the soundscape |
+| , / . | D-pad ↓ / ↑ | Sound volume down / up (saved per browser) |
+| Shift+M | LT+D-pad ← | Mute / unmute the mic |
+| Shift+C | D-pad → | Recalibrate the mic noise floor |
+| [ / ] | LT+D-pad ↓ / ↑ | Mic sensitivity down / up (pulse size; saved per browser) |
+| - / = | LT+LB / LT+RB | Mic trigger level down / up (dB above room noise; saved per browser) |
+| 0 | LT+B | Reset mic tuning to the defaults |
+| ` (backtick) | LT+Menu | Audio debug meter |
+| R | R3 | Debug: reveal everything (full grid on the real material; pings and red still draw on top) |
+| F | LT+R3 | Debug: free-fly camera (E/Q up/down, Shift fast, G back to eye height) |
+| T / N | LT+Y / LT+A | Debug: entity overlay / entity test ping |
+| P / Shift+P | LT+D-pad → / LT+L3 | Dev builds only: fake ping of the next type / one of each type ahead |
+| Esc | | Release the mouse (the controller doesn't need it) |
+
+Haptics (controllers with `vibrationActuator` dual-rumble): cane taps give a short weak-motor pulse scaled by how fast the tip hit. Bumps and stuns use the controller's stun intensity (0.25 knock up to 1.0 full stun) for strength (0.3–1) and length (120–800 ms). A car hit is always full on both motors. Nothing else vibrates.
 
 ## Map data
 
@@ -169,8 +180,10 @@ src/
   world/debug*.ts          R reveal-all key, F free-fly camera, debug readout
   player/controller.ts     first-person movement, stuns (world 'stunned' event)
   player/collision.ts      raycast wall + ground collision against world.tilesGroup
+  player/gamepad*.ts       controller input (Gamepad API) + the one mapping table
+  player/haptics.ts        controller rumble scaled by impact (cane taps, bumps, stuns, cars)
   senses/footsteps.ts      the player's footstep pings
-  senses/cane.ts           white cane (sweep, contact taps)
+  senses/cane.ts           white cane (visible, manual + two-point-touch auto-sweep, contact taps)
   senses/vision*.ts        vision modes, presets, picker
   audio/                   mic -> voice pings; soundscape.ts spatial audio; synth.ts procedural sounds
   hud/                     attribution, start screen, stun vignette, cane gauge, vision label
@@ -308,7 +321,7 @@ While the start screen is up the ground grid builds in loading mode (24 ms per f
 
 ## White cane
 
-Hold C or right mouse to sweep the cane (1.2 m, 60°), drawn as a thin white line (look down to see it) with a gauge at the bottom of the screen. Contacts with walls, curbs or posts give a 1.5 m `cane` ping, a tap sound and an audit record; V gives a hard 4 m tap.
+The cane is always out, drawn in first person as a thin tube (shared sonar material, lit along its length) from the lower-right of the view to its tip on the ground 1.2 m ahead. Its tip is drawn raised just inside the bottom of the view, so you see it without looking down. **Auto-sweep** (X / controller Y, on by default) uses the two-point touch technique: the tip touches down left, then right, in rhythm with your footsteps (left tap on the right step), across a 60° arc. It ticks and pings on each touch-down, and rests in the centre when you stand still. Hold C, right mouse or RT to sweep by hand instead. Contacts with walls, curbs or posts give a 1.5 m `cane` ping, a tap sound, an audit record and a haptic pulse scaled by tip speed. B (controller A) gives a hard 6 m tap. Tuning: `src/senses/config.ts`.
 
 ## Attribution (must stay visible)
 
