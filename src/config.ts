@@ -5,16 +5,50 @@
  * Plain constants only: no logic here, so edits never conflict with module code.
  */
 
-/** Street the game is centred on (University of Warwick campus). */
+/**
+ * Street the game is centred on (University of Warwick campus), in degrees.
+ * scripts/fetch-osm.mjs reads these two lines and PLAY_RADIUS with a regex:
+ * keep them as plain `export const NAME = <number>;`.
+ */
 export const ORIGIN_LAT = 52.3793;
 export const ORIGIN_LON = -1.5615;
 
-/** Tweak until OSM roads line up with the tile grid (use F + R in game). */
-export const YAW_OFFSET = 0; // radians
+/**
+ * Approximate ground height at the origin above the WGS84 ellipsoid, in metres
+ * (measured at the origin with AUTO_GROUND: campus ~89 m above sea level + ~48 m geoid offset). Tiles are placed so this height
+ * sits at y = 0; AUTO_GROUND then fine-tunes it by raycasting the loaded tiles.
+ */
+export const ORIGIN_HEIGHT = 136.6;
+
+/** Re-level the tiles so the ground at the origin is y = 0 (first minute after loading only). */
+export const AUTO_GROUND = true;
+
+/**
+ * Local axes after reorientation (Y up, metres): +X = west, +Z = north, origin at ORIGIN_LAT/LON.
+ * Tweak these until OSM roads line up with the tile grid (use F + R in game).
+ * They move the OSM paths/agents, not the tiles.
+ */
+export const YAW_OFFSET = 0; // radians, rotation about +Y
 export const XZ_OFFSET = { x: 0, z: 0 }; // metres
 
 /** Playable area radius in metres. */
 export const PLAY_RADIUS = 250;
+
+/** Tiles are only loaded inside this radius around the origin (play area + margin for the horizon). */
+export const TILE_LOAD_RADIUS = PLAY_RADIUS + 100;
+
+/** 3d-tiles-renderer screen-space error target: lower = more detail (and more tiles to cache). */
+export const TILES_ERROR_TARGET = 16;
+
+/** Camera clipping planes in metres. */
+export const CAMERA_NEAR = 0.1;
+export const CAMERA_FAR = 3000;
+
+/** Where `npm run setup:draco` copies three's Draco decoder (served by Vite from public/). */
+export const DRACO_PATH = '/draco/';
+
+/** Range in metres of the debug test ping fired with Space. */
+export const TEST_PING_RANGE = 40;
 
 /** Spacing of the world-space grid lines in metres. */
 export const GRID_SIZE = 0.5;
