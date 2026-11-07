@@ -73,6 +73,12 @@ export const TEST_PING_RANGE = 40;
 /** Spacing of the world-space grid lines in metres. */
 export const GRID_SIZE = 0.5;
 
+/** Pedestrians walking the footways (src/world/agents.ts): some in groups, some idling, a few crossing the road. */
+export const PEDESTRIAN_COUNT = 50;
+
+/** Cars driving the roads (src/world/agents.ts). */
+export const CAR_COUNT = 6;
+
 /** Always-visible radius around the player in metres. */
 export const ARM_REACH = 0.4;
 

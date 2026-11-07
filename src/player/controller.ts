@@ -16,6 +16,7 @@ import {
   setCollisionTargets,
 } from './collision';
 import { createStunEffect } from './stunEffect';
+import { clampToPlayArea, isInsidePlayArea } from '../world/playArea';
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -34,9 +35,11 @@ const BUMP_EFFECT_DURATION = 0.4; // s, small camera wobble for non-stunning bum
 const BUMP_EFFECT_INTENSITY = 0.25;
 const GROUND_SMOOTHING = 20;      // 1/s, smooths Y over small bumps (still "glued" to the floor)
 const WALL_PUSH_OUT_DISTANCE = 0.3; // if closer than this to a wall, nudge away from it
+const PLAY_AREA_INSET = 0.3;      // m, the player stops this far inside the corridor walls
+const EXTERNAL_MAX_SPEED = 9;     // m/s, cap on speed after applyImpulse() (a car hit is a fling, not a launch)
 
 /** Set to false when real terrain (world.tilesGroup) is ready. */
-const USE_TEST_GEOMETRY = true;
+const USE_TEST_GEOMETRY = false;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -47,10 +50,29 @@ export interface ControllerOptions {
   onStunned?: (duration: number, impactSpeed: number) => void;
 }
 
+/** Extra info for applyImpulse(). */
+export interface ImpulseOptions {
+  /**
+   * Speed (m/s) of the hit along the contact normal. Compared with the same bump / stun thresholds
+   * as wall hits (REBOUND_MIN_IMPACT, STUN_SPEED_THRESHOLD) and scales the stun duration the same way.
+   */
+  impactSpeed?: number;
+  /** Stun regardless of impactSpeed (e.g. hit by a car); the duration still scales with impactSpeed. */
+  forceStun?: boolean;
+}
+
 export interface PlayerController {
   controls: PointerLockControls;
   /** Current horizontal speed in m/s. */
   getSpeed(): number;
+  /** Copies the current horizontal velocity (m/s, y = 0) into `out`. */
+  getVelocity(out?: THREE.Vector3): THREE.Vector3;
+  /**
+   * External push (agent collisions): adds `impulse` (m/s, horizontal part only) to the velocity, so it
+   * goes through the normal momentum, friction and wall-sliding. With `options.impactSpeed` it also
+   * triggers the usual bump wobble / stun + onStunned using the same thresholds as wall hits.
+   */
+  applyImpulse(impulse: THREE.Vector3, options?: ImpulseOptions): void;
   isStunned(): boolean;
   /** Disable e.g. while the free-fly debug camera is active. */
   setEnabled(enabled: boolean): void;
@@ -81,9 +103,18 @@ const right = new THREE.Vector3();
 const dirTmp = new THREE.Vector3();
 const lateral = new THREE.Vector3();
 const reboundTmp = new THREE.Vector3();
+const clampTmp = new THREE.Vector3();
+const clampNormal = new THREE.Vector3();
 const lastNormal = new THREE.Vector3();
 const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const UP = new THREE.Vector3(0, 1, 0);
+
+let current: PlayerController | null = null;
+
+/** The live controller, or null before initController() has run (agents look it up each frame). */
+export function getPlayerController(): PlayerController | null {
+  return current;
+}
 
 export function initController(options: ControllerOptions = {}): PlayerController {
   const camera = world.camera as THREE.PerspectiveCamera;
@@ -142,6 +173,40 @@ export function initController(options: ControllerOptions = {}): PlayerControlle
       }
     }
     return impactSpeed;
+  }
+
+  /** Keep the player inside the corridor walls and drop the velocity pushing out through them. */
+  function keepInsidePlayArea(pos: THREE.Vector3): void {
+    if (isInsidePlayArea(pos, -PLAY_AREA_INSET)) return;
+    clampToPlayArea(pos, PLAY_AREA_INSET, clampTmp);
+    clampNormal.set(clampTmp.x - pos.x, 0, clampTmp.z - pos.z);
+    pos.x = clampTmp.x;
+    pos.z = clampTmp.z;
+    const len = clampNormal.length();
+    if (len < 1e-6) return;
+    clampNormal.divideScalar(len); // points back into the corridor
+    const into = velocity.dot(clampNormal);
+    if (into < 0) velocity.addScaledVector(clampNormal, -into);
+  }
+
+  /**
+   * Stun / bump for an impact that did not come from resolveWalls() (see applyImpulse). Same
+   * thresholds and duration curve as the wall-hit stun in update().
+   */
+  function stunFromImpact(impactSpeed: number, force: boolean): void {
+    if (impactSpeed < STUN_SPEED_THRESHOLD && !force) {
+      if (impactSpeed >= REBOUND_MIN_IMPACT) effect.trigger(BUMP_EFFECT_DURATION, BUMP_EFFECT_INTENSITY);
+      return;
+    }
+    const t = THREE.MathUtils.clamp(
+      (impactSpeed - STUN_SPEED_THRESHOLD) / (MAX_SPEED - STUN_SPEED_THRESHOLD),
+      0,
+      1,
+    );
+    const duration = THREE.MathUtils.lerp(STUN_MIN_DURATION, STUN_MAX_DURATION, t);
+    stunTimer = Math.max(stunTimer, duration);
+    effect.trigger(duration, 0.5 + 0.5 * t);
+    options.onStunned?.(duration, impactSpeed);
   }
 
   function update(dtRaw: number) {
@@ -219,6 +284,9 @@ export function initController(options: ControllerOptions = {}): PlayerControlle
       pos.z += velocity.z * dt;
     }
 
+    // ---- 6b. Stay inside the corridor walls (after either movement step) ----
+    keepInsidePlayArea(pos);
+
     // ---- 7. Stay glued to the ground (with the stun head-dip) ----
     effect.update(dt);
     const targetY = groundHeight(pos) + PLAYER_HEIGHT - effect.headDip;
@@ -227,9 +295,18 @@ export function initController(options: ControllerOptions = {}): PlayerControlle
 
   world.onUpdate(update);
 
-  return {
+  const controller: PlayerController = {
     controls,
     getSpeed: () => velocity.length(),
+    getVelocity: (out = new THREE.Vector3()) => out.copy(velocity),
+    applyImpulse(impulse, impulseOptions = {}) {
+      if (!enabled) return;
+      velocity.x += impulse.x;
+      velocity.z += impulse.z;
+      velocity.y = 0;
+      if (velocity.length() > EXTERNAL_MAX_SPEED) velocity.setLength(EXTERNAL_MAX_SPEED);
+      stunFromImpact(impulseOptions.impactSpeed ?? 0, impulseOptions.forceStun ?? false);
+    },
     isStunned: () => stunTimer > 0,
     setEnabled(value: boolean) {
       enabled = value;
@@ -245,6 +322,9 @@ export function initController(options: ControllerOptions = {}): PlayerControlle
       window.removeEventListener('blur', onBlur);
       effect.dispose();
       controls.dispose();
+      if (current === controller) current = null;
     },
   };
+  current = controller;
+  return controller;
 }
