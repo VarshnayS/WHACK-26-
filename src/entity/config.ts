@@ -92,11 +92,18 @@ export const AUDIO_ENABLED = true;
 
 // --- body ------------------------------------------------------------------------------------------
 
-/** Total height of the figure. */
+/** Height of the figure's proportions before BODY_SCALE. */
 export const BODY_HEIGHT = 2.5;
+/** Uniform scale on the whole figure (1.5 = 3.75 m tall and 50% thicker), so it towers over people. */
+export const BODY_SCALE = 1.5;
+/**
+ * Colour of its sonar lines (r, g, b in 0..1), so it stands out from the white world.
+ * NOTE: breaks AGENTS.md rule 9 (white lines only) on purpose; set to [1, 1, 1] to follow it.
+ */
+export const BODY_TINT: readonly [number, number, number] = [0.95, 0.08, 0.05];
 /** Grid spacing on its body (object-space grid). */
 export const BODY_GRID_SIZE = 0.1;
-/** Metres per full walk cycle (two steps). */
+/** Metres per full walk cycle (two steps) at BODY_SCALE 1; scaled with the body. */
 export const STRIDE_LENGTH = 1.8;
 
 // --- debug -----------------------------------------------------------------------------------------

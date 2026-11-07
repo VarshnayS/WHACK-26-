@@ -8,8 +8,8 @@
  * Model faces +Z, feet at y = 0. Limbs hang from pivot groups at the hips and shoulders.
  */
 import * as THREE from 'three';
-import { createAgentMaterial } from '../world/agentMaterial';
-import { BODY_GRID_SIZE, BODY_HEIGHT, STRIDE_LENGTH } from './config';
+import { createSonarMaterial } from '../render/sonarMaterial';
+import { BODY_GRID_SIZE, BODY_HEIGHT, BODY_SCALE, BODY_TINT, STRIDE_LENGTH } from './config';
 
 export interface EntityBody {
   root: THREE.Group;
@@ -17,9 +17,28 @@ export interface EntityBody {
   update(dt: number, position: THREE.Vector3, heading: number, speed: number): void;
 }
 
+/** The sonar shader's final line; the entity multiplies it by BODY_TINT. */
+const SONAR_OUTPUT = 'gl_FragColor = vec4(vec3(grid * min(reveal, 1.0)), 1.0);';
+
+/** Tint this material's sonar lines (only the entity's copy; tiles and agents stay white). */
+function tint(material: THREE.ShaderMaterial): THREE.ShaderMaterial {
+  const [r, g, b] = BODY_TINT;
+  if (r === 1 && g === 1 && b === 1) return material;
+  if (!material.fragmentShader.includes(SONAR_OUTPUT)) {
+    console.warn('[entity] sonar shader changed; body stays white');
+    return material;
+  }
+  const colour = `vec3(${r.toFixed(3)}, ${g.toFixed(3)}, ${b.toFixed(3)})`;
+  material.fragmentShader = material.fragmentShader.replace(
+    SONAR_OUTPUT,
+    `gl_FragColor = vec4(${colour} * (grid * min(reveal, 1.0)), 1.0);`,
+  );
+  return material;
+}
+
 export function createEntityBody(): EntityBody {
-  // TODO(RENDER): switch to createSonarMaterial({ objectSpace: true, gridSize }) once it's on main.
-  const material = createAgentMaterial('entity', BODY_GRID_SIZE);
+  // Shared sonar material with the grid fixed to the body, so lines don't slide as it moves.
+  const material = tint(createSonarMaterial({ name: 'entity', gridSpace: 'object', gridSize: BODY_GRID_SIZE }));
   const h = BODY_HEIGHT;
   const legLen = h * 0.52;
   const torsoLen = h * 0.22;
@@ -29,6 +48,7 @@ export function createEntityBody(): EntityBody {
 
   const root = new THREE.Group();
   root.name = 'entity';
+  root.scale.setScalar(BODY_SCALE);
 
   const part = (geo: THREE.BufferGeometry, parent: THREE.Object3D, x: number, y: number, z: number) => {
     const m = new THREE.Mesh(geo, material);
@@ -85,7 +105,7 @@ export function createEntityBody(): EntityBody {
       root.rotation.y = yaw;
 
       const moving = Math.min(1, speed / 1.0);
-      phase += ((speed * dt) / STRIDE_LENGTH) * Math.PI * 2;
+      phase += ((speed * dt) / (STRIDE_LENGTH * BODY_SCALE)) * Math.PI * 2;
       const swing = Math.sin(phase) * 0.45 * moving;
       legL.rotation.x = swing;
       legR.rotation.x = -swing;
