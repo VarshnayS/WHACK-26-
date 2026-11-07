@@ -4,30 +4,30 @@
  *
  * Everything is drawn white on black (AGENTS.md rule 9): a style changes speed, ring thickness,
  * brightness and how fast the ring fades after it passes. A style may also carry a `color`, which
- * src/render/pingColors.ts honours (render-side extension of PingStyle); only grey shades are used
- * here, so no new colour is introduced. Tune here, nowhere else.
+ * src/render/pingColors.ts honours (render-side extension of PingStyle). One deliberate exception
+ * to rule 9: cane pings are light blue (CANE_COLOR), so the cane's sonar reads apart from everything else. Tune here, nowhere else.
  */
 import type { PingStyle, PingType } from '../shared/contracts';
 import { PED_PING_BRIGHTNESS, PED_PING_RANGE, PED_PING_RADIUS, VOICE_FADE } from '../config';
 
 // --- ping look per type ------------------------------------------------------------------------
 
-/** Linear RGB 0..1. Grey = equal channels below 1, so the cane reads apart from white pings. */
+/** Linear RGB 0..1. */
 export type PingRgb = readonly [number, number, number];
 
 /** PingStyle plus the optional render-side `color` (see header). */
 export type SoundPingStyle = PingStyle & { color?: PingRgb };
 
-/** Cane rings and the lines they reveal are dim grey instead of white (1 = white, 0 = invisible). */
-export const CANE_GREY = 0.5;
+/** Cane rings and the lines they reveal are light blue instead of white. [1, 1, 1] = white. */
+export const CANE_COLOR: PingRgb = [0.45, 0.75, 1.0];
 
 export const PING_STYLES: Readonly<Record<PingType, Readonly<SoundPingStyle>>> = {
   /** Player's voice / clap: big, bright, slow enough to read the street. */
   voice: { speed: 30, thickness: 1.2, brightness: 1.0, fade: VOICE_FADE },
   /** Player's own footsteps: faint, short (callers use ~2–5 m ranges). */
   footstep: { speed: 12, thickness: 0.3, brightness: 0.35, fade: 2.5 },
-  /** Cane tap: tiny, sharp, quick, and dim grey so it stands apart from voice/footstep rings. */
-  cane: { speed: 15, thickness: 0.12, brightness: 0.85, fade: 4, color: [CANE_GREY, CANE_GREY, CANE_GREY] },
+  /** Cane sweep / tap: tiny, sharp, quick, and light blue so it stands apart from voice/footstep rings. */
+  cane: { speed: 15, thickness: 0.12, brightness: 0.85, fade: 4, color: CANE_COLOR },
   /** Car engine: medium, periodic. */
   car: { speed: 20, thickness: 0.6, brightness: 0.55, fade: 1.5 },
   /** Other people's footsteps: faint. */
