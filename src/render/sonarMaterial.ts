@@ -26,12 +26,9 @@
  */
 import * as THREE from 'three';
 import { MAX_PINGS } from '../shared/contracts';
-import { ARM_REACH, EYE_HEIGHT, GRID_SIZE, WAVE_SPEED } from '../config';
+import { ARM_REACH, EYE_HEIGHT, GRID_SIZE } from '../config';
 
 export { MAX_PINGS };
-
-/** A ping start time this far in the past means "slot unused" (legacy uPingStart only). */
-export const PING_UNUSED = -1e6;
 
 /** Coarse grid spacing as a multiple of the grid size (shown where the fine grid fades out). */
 const GRID_COARSE = 4;
@@ -58,17 +55,6 @@ export type SonarUniforms = {
   uPingC: THREE.IUniform<THREE.Vector4[]>;
   /** 1 = debug "reveal everything" (R key): full grid, no sonar mask. */
   uRevealAll: THREE.IUniform<number>;
-  /**
-   * @deprecated Legacy ping layout, still read by src/world/agentMaterial.ts until it switches to
-   * createSonarMaterial({ gridSpace: 'object' }). Filled so its rings line up with the real ones.
-   */
-  uWaveSpeed: THREE.IUniform<number>;
-  /** @deprecated see uWaveSpeed */
-  uPingOrigin: THREE.IUniform<THREE.Vector3[]>;
-  /** @deprecated see uWaveSpeed */
-  uPingStart: THREE.IUniform<number[]>;
-  /** @deprecated see uWaveSpeed */
-  uPingRange: THREE.IUniform<number[]>;
 };
 
 export const sonarUniforms: SonarUniforms = {
@@ -82,10 +68,6 @@ export const sonarUniforms: SonarUniforms = {
   uPingB: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector4()) },
   uPingC: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector4()) },
   uRevealAll: { value: 0 },
-  uWaveSpeed: { value: WAVE_SPEED },
-  uPingOrigin: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector3()) },
-  uPingStart: { value: new Array<number>(MAX_PINGS).fill(PING_UNUSED) },
-  uPingRange: { value: new Array<number>(MAX_PINGS).fill(0) },
 };
 
 const vertexShader = /* glsl */ `
@@ -222,12 +204,29 @@ export function createSonarMaterial(options: SonarMaterialOptions = {}): THREE.S
 /** The one material every tile uses (world-space grid). */
 export const sonarMaterial = createSonarMaterial({ name: 'sonar' });
 
-/** Debug: show the full grid everywhere (R key), for checking alignment. */
+const revealAllListeners = new Set<(on: boolean) => void>();
+
+/**
+ * Debug: show the full grid everywhere (R key), for checking alignment. Pings still draw on top, so
+ * red impacts show in reveal-all too. Every tile and agent uses this material, so nothing is swapped.
+ */
 export function setRevealAll(on: boolean): void {
+  if (on === isRevealAll()) return;
   sonarUniforms.uRevealAll.value = on ? 1 : 0;
+  for (const fn of revealAllListeners) fn(on);
 }
 
 /** True while reveal-all is on. */
 export function isRevealAll(): boolean {
   return sonarUniforms.uRevealAll.value > 0.5;
+}
+
+export function toggleRevealAll(): void {
+  setRevealAll(!isRevealAll());
+}
+
+/** Called whenever reveal-all changes (e.g. the corridor outline in src/world/debugKeys.ts). Returns unsubscribe. */
+export function onRevealAllChange(fn: (on: boolean) => void): () => void {
+  revealAllListeners.add(fn);
+  return () => revealAllListeners.delete(fn);
 }

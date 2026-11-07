@@ -11,7 +11,7 @@
  * - LoadRegionPlugin masks loading to the play corridor (+ CORRIDOR_TILE_MARGIN), and each loaded
  *   tile's triangles are trimmed to that same box, so no geometry outside it is kept or drawn.
  * - Every 'load-model' event: original materials/textures are disposed, uv/colour attributes are
- *   dropped, and the mesh gets the shared sonarMaterial (or the debug grid while R is on).
+ *   dropped, and the mesh gets the shared sonarMaterial (R = setRevealAll() on that same material).
  * - Copyright strings of visible tiles are kept in world.attributions and sent to the HUD.
  */
 import * as THREE from 'three';
@@ -21,7 +21,6 @@ import { OBB, TilesRenderer, WGS84_ELLIPSOID } from '3d-tiles-renderer/three';
 import { GLTFExtensionsPlugin, LoadRegionPlugin, OBBRegion, ReorientationPlugin } from '3d-tiles-renderer/three/plugins';
 import { GoogleCloudAuthPlugin } from '3d-tiles-renderer/core/plugins';
 import { world } from './index';
-import { assignWorldMaterial, debugMaterial, getWorldMaterial, onRevealAllChange } from './debugMaterial';
 import { initWorldDebug } from './debugKeys';
 import { CORRIDOR_BASIS, CORRIDOR_HALF_LENGTH, isInsidePlayArea } from './playArea';
 import { setTileAttribution } from '../hud/hud';
@@ -85,7 +84,7 @@ function publishAttributions(): void {
 // --- material stripping ----------------------------------------------------------------------
 
 function disposeMaterial(material: THREE.Material): void {
-  if (material === sonarMaterial || material === debugMaterial) return;
+  if (material === sonarMaterial) return;
   for (const value of Object.values(material)) {
     if (value && (value as THREE.Texture).isTexture) {
       const texture = value as THREE.Texture;
@@ -99,10 +98,10 @@ function disposeMaterial(material: THREE.Material): void {
 
 /**
  * Dispose every original material + texture under `root` and replace it with the shared
- * sonarMaterial (or the debug grid while reveal-all is on). Also drops uv/colour attributes.
+ * sonarMaterial. Also drops uv/colour attributes.
  */
 export function applySonarMaterial(root: THREE.Object3D): void {
-  const material = getWorldMaterial();
+  const material = sonarMaterial;
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh) return;
@@ -329,10 +328,6 @@ export function initTiles(): void {
   t.addEventListener('load-error', ({ url, error }) => {
     console.warn(`[tiles] failed to load ${String(url).split('?')[0]}: ${error?.message ?? error}`);
   });
-
-  // R toggles between the shared material and the debug grid on every loaded tile
-  // (including ones currently hidden, which forEachLoadedModel also visits).
-  onRevealAllChange(() => t.forEachLoadedModel((scene) => assignWorldMaterial(scene)));
 
   world.onUpdate(() => {
     world.camera.updateMatrixWorld();

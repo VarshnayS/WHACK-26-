@@ -123,8 +123,7 @@ export interface DetectorConfig {
   /** Brightness used for keyboard pulses. */
   keyboardBrightness: number;
 
-  /** Draw each active pulse as an expanding ring (src/sonar/debug-rings.ts) until the shader exists. */
-  debugRings: boolean;
+
 }
 
 export const DETECTOR_CONFIG: DetectorConfig = {
@@ -174,7 +173,6 @@ export const DETECTOR_CONFIG: DetectorConfig = {
   keyboardStrength: 0.5,
   keyboardBrightness: 0.5,
 
-  debugRings: false, // world.ping now drives the real shader
 };
 
 // ---------------------------------------------------------------------------------------------

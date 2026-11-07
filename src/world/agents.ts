@@ -193,8 +193,8 @@ function turnTowards(current: number, target: number, rate: number, dt: number):
 }
 
 function emitAgentNoise(position: THREE.Vector3, loudness: number): void {
-  // TODO(world.emitNoise): the shared `world` has no emitNoise yet (the noise bus lives in
-  // src/sonar/pulses.ts, owned by C). Once it is added to the World contract this starts working.
+  // The entity hears collisions through their 'impact' pings (world.activePings()). If a world.emitNoise
+  // is ever added to the contract, this starts calling it too.
   const w = world as World & { emitNoise?: (position: THREE.Vector3, loudness: number) => void };
   w.emitNoise?.(position, loudness);
 }
