@@ -131,6 +131,11 @@ export interface PlayerController {
    * applied; the length sets the top speed). `run` = L3. Works without pointer lock. Keyboard wins.
    */
   setPadInput(x: number, z: number, run: boolean): void;
+  /**
+   * Teleport to `position` (x/z; y snaps to the ground), stop, clear any stun, and face `lookAt`
+   * if given (level gaze). Clamped inside the corridor walls. Used for the route's start point.
+   */
+  placeAt(position: THREE.Vector3, lookAt?: THREE.Vector3): void;
   /** Disable e.g. while the free-fly debug camera is active. */
   setEnabled(enabled: boolean): void;
   dispose(): void;
@@ -449,6 +454,23 @@ function resolveWalls(pos: THREE.Vector3): number {
       padX = x;
       padZ = z;
       padRun = run;
+    },
+    placeAt(position, lookAt) {
+      const pos = camera.position;
+      pos.x = position.x;
+      pos.z = position.z;
+      velocity.set(0, 0, 0);
+      stunTimer = 0;
+      keepInsidePlayArea(pos);
+      pos.y = groundHeight(pos) + PLAYER_HEIGHT;
+      if (lookAt) {
+        const dx = lookAt.x - pos.x;
+        const dz = lookAt.z - pos.z;
+        // forward is (-sin yaw, 0, -cos yaw) in the YXZ euler update() reads
+        if (dx * dx + dz * dz > 1e-6) camera.quaternion.setFromEuler(euler.set(0, Math.atan2(-dx, -dz), 0, 'YXZ'));
+      }
+      camera.updateMatrixWorld(true);
+      lastLoggedWallObject = null;
     },
     setEnabled(value: boolean) {
       enabled = value;
