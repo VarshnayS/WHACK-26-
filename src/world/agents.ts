@@ -30,6 +30,7 @@ import { clampToPlayArea, isInsidePlayArea } from './playArea';
 import { CAR_GRID_SIZE, PERSON_GRID_SIZE, createAgentMaterial } from './agentMaterial';
 import { HumanoidCrowd, strideLength } from './humanoid';
 import { createContact, verticalCapsuleOverlap, verticalCapsuleVsBox, type Contact } from './agentContacts';
+import { pedestrianFootstep, playerAgentCollision } from './soundSources';
 import { groundGeneration, initGroundField, sampleGround } from './heightField';
 import { isDebugCameraActive } from './debugCamera';
 import { getPlayerController } from '../player/controller';
@@ -193,8 +194,8 @@ function turnTowards(current: number, target: number, rate: number, dt: number):
 }
 
 function emitAgentNoise(position: THREE.Vector3, loudness: number): void {
-  // TODO(world.emitNoise): the shared `world` has no emitNoise yet (the noise bus lives in
-  // src/sonar/pulses.ts, owned by C). Once it is added to the World contract this starts working.
+  // The entity hears collisions through their 'impact' pings (world.activePings()). If a world.emitNoise
+  // is ever added to the contract, this starts calling it too.
   const w = world as World & { emitNoise?: (position: THREE.Vector3, loudness: number) => void };
   w.emitNoise?.(position, loudness);
 }
@@ -805,7 +806,12 @@ function placeWalker(w: Walker, dt: number): void {
   const speed = Math.hypot(vx, vz);
   w.curSpeed += (speed - w.curSpeed) * Math.min(1, 10 * dt);
   if (w.mode !== 'stumble' && speed > 0.2 && dt > 0) w.yaw = turnTowards(w.yaw, Math.atan2(vx, vz), 8, dt);
-  if (w.mode !== 'stumble') w.phase += (Math.PI * 2 * w.curSpeed * dt) / strideLength(w.height);
+  if (w.mode !== 'stumble') {
+    // one gait cycle (2π) = two steps: a footstep each time the phase crosses a multiple of π
+    const step = Math.floor(w.phase / Math.PI);
+    w.phase += (Math.PI * 2 * w.curSpeed * dt) / strideLength(w.height);
+    if (Math.floor(w.phase / Math.PI) !== step) pedestrianFootstep(agent, w.curSpeed);
+  }
 
   const ground = sampleGround(agent.position.x, agent.position.z);
   w.y = Number.isNaN(w.y) ? ground : w.y + (ground - w.y) * Math.min(1, 12 * dt);
@@ -850,6 +856,12 @@ function poseWalkers(): void {
 
 const playerVel = new THREE.Vector3();
 const impulse = new THREE.Vector3();
+const contactPoint = new THREE.Vector3();
+
+/** Approximate contact point: the player's surface along the normal, ~1 m above the agent's base. */
+function contactPointFor(pos: THREE.Vector3, n: THREE.Vector3, agentBaseY: number): THREE.Vector3 {
+  return contactPoint.set(pos.x - n.x * PLAYER_RADIUS, agentBaseY + 1, pos.z - n.z * PLAYER_RADIUS);
+}
 
 /** Push the player (the camera is the player position) out of an overlap, at most MAX_SEPARATION per frame. */
 function separatePlayer(nx: number, nz: number, depth: number): void {
@@ -995,6 +1007,7 @@ export async function initAgents(): Promise<void> {
   initGroundField(); // agents stand on the precomputed height grid (needs initTiles() to have run)
 
   const osm = await loadOsm();
+  performance.mark('agents:osm-loaded');
   pedestrianGraph = buildPathGraph(osm, 'footway', { highways: PEDESTRIAN_HIGHWAYS });
   carGraph = buildPathGraph(osm, 'road', { highways: CAR_HIGHWAYS });
 
@@ -1030,6 +1043,7 @@ export async function initAgents(): Promise<void> {
   }
 
   world.onUpdate(updateAgents);
+  performance.mark('agents:ready');
 }
 
 // --- debug / tests -----------------------------------------------------------------------------

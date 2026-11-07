@@ -5,10 +5,8 @@
  *
  *   R      reveal all (debug grid on every tile/agent, no sonar mask)
  *   F      free-fly debug camera (see debugCamera.ts)
- *   Space  test ping: world.ping(camera position, TEST_PING_RANGE)
  *
- * Space is a stand-in until the player controller / mic (owner C) fire pings. When C binds
- * Space in src/player/controller.ts, delete the Space handler here so it doesn't ping twice.
+ * (The old Space test ping is gone: the mic module in src/audio/ owns Space now.)
  *
  * The readout (top-left, only while R or F is on) shows the camera position, where it is in the
  * corridor and whether tiles are still loading, which helps while warming the tile cache, plus an
@@ -16,11 +14,11 @@
  * separate element from the HUD (owner C) and never covers the attribution.
  */
 import { world } from './index';
-import { isRevealAll, onRevealAllChange, toggleRevealAll } from './debugMaterial';
+import { isRevealAll, onRevealAllChange, toggleRevealAll } from '../render/sonarMaterial';
 import { initDebugCamera, isDebugCameraActive, toggleDebugCamera } from './debugCamera';
 import { getGroundOffset, getTileStats } from './tiles';
 import { createPlayAreaOutline, isInsidePlayArea, toCorridor } from './playArea';
-import { CORRIDOR_HALF_WIDTH, CORRIDOR_LENGTH, TEST_PING_RANGE } from '../config';
+import { CORRIDOR_HALF_WIDTH, CORRIDOR_LENGTH } from '../config';
 
 let initialised = false;
 let readout: HTMLDivElement | null = null;
@@ -46,10 +44,6 @@ function onKeyDown(e: KeyboardEvent): void {
       console.info(
         `[debug] free-fly camera ${isDebugCameraActive() ? 'ON (click to look, WASD, E/Q up/down, Shift fast, G eye height)' : 'OFF'}`,
       );
-      break;
-    case 'Space':
-      e.preventDefault();
-      world.ping(world.camera.position, TEST_PING_RANGE);
       break;
     default:
       return;

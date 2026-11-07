@@ -40,6 +40,10 @@ const GROUND_SMOOTHING = 20;      // 1/s, smooths Y over small bumps (still "glu
 const WALL_PUSH_OUT_DISTANCE = 0.3; // if closer than this to a wall, nudge away from it
 const PLAY_AREA_INSET = 0.3;      // m, the player stops this far inside the corridor walls
 const EXTERNAL_MAX_SPEED = 9;     // m/s, cap on speed after applyImpulse() (a car hit is a fling, not a launch)
+// Red 'impact' ping at the wall on a stun (same scale SOUND uses for agent hits)
+const WALL_IMPACT_RANGE_BASE = 6;     // m
+const WALL_IMPACT_RANGE_PER_MPS = 2;  // m per m/s of impact speed
+const WALL_IMPACT_RANGE_MAX = 20;     // m
 
 /** Set to false when real terrain (world.tilesGroup) is ready. */
 const USE_TEST_GEOMETRY = false;
@@ -62,6 +66,23 @@ export interface ImpulseOptions {
   impactSpeed?: number;
   /** Stun regardless of impactSpeed (e.g. hit by a car); the duration still scales with impactSpeed. */
   forceStun?: boolean;
+}
+
+/**
+ * Payload of world.emit('stunned', ...), fired by this controller on every stun (walls and
+ * applyImpulse hits: pedestrians, cars). Listeners: HUD red vignette, soundscape thud, audit.
+ */
+export interface StunnedPayload {
+  /** Stun length in seconds. */
+  duration: number;
+  /** m/s along the contact normal. */
+  impactSpeed: number;
+  /** 0..1, how hard the hit was (drives the effects). */
+  intensity: number;
+  /** Contact point for wall hits, else the player's position (a copy, safe to keep). */
+  position: THREE.Vector3;
+  /** What caused it: a wall/tile hit, or an external push (agent collision). */
+  source: 'wall' | 'impulse';
 }
 
 export interface PlayerController {
@@ -109,6 +130,7 @@ const reboundTmp = new THREE.Vector3();
 const clampTmp = new THREE.Vector3();
 const clampNormal = new THREE.Vector3();
 const lastNormal = new THREE.Vector3();
+const lastPoint = new THREE.Vector3();
 const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -164,20 +186,24 @@ function resolveWalls(pos: THREE.Vector3): number {
     const hit = checkCollision(pos, dirTmp);
     if (!hit.blocked) break;
 
-    // Remove only the component pushing into the wall.
+    // Remove only the component pushing into the wall -> slide along it.
     const into = -velocity.dot(hit.normal);
 
     if (into > 0) {
       if (into > impactSpeed) {
         impactSpeed = into;
         lastNormal.copy(hit.normal);
-        strongestHit = hit;
+        
+        // Combine the properties we need from both branches
+        lastPoint.copy(hit.point); // Needed from main
+        strongestHit = hit;        // Needed from HEAD for the audit logger
       }
-
+      
+      // Stop the velocity into the wall (Execute ONLY once)
       velocity.addScaledVector(hit.normal, into);
     }
 
-    // Ease back out if we've ended up too close.
+    // Ease back out if we've ended up too close (Execute ONLY once)
     if (hit.distance < WALL_PUSH_OUT_DISTANCE) {
       pos.addScaledVector(
         hit.normal,
@@ -230,6 +256,33 @@ function resolveWalls(pos: THREE.Vector3): number {
     stunTimer = Math.max(stunTimer, duration);
     effect.trigger(duration, 0.5 + 0.5 * t);
     options.onStunned?.(duration, impactSpeed);
+    // agents.ts / SOUND already fire the red impact ping and the audit record for agent hits
+    emitStunned(duration, impactSpeed, 0.5 + 0.5 * t, camera.position, 'impulse');
+  }
+
+  function emitStunned(
+    duration: number,
+    impactSpeed: number,
+    intensity: number,
+    position: THREE.Vector3,
+    source: StunnedPayload['source'],
+  ): void {
+    const payload: StunnedPayload = { duration, impactSpeed, intensity, position: position.clone(), source };
+    world.emit('stunned', payload);
+  }
+
+  /** Wall/tile hit: audit record (contract: SENSES records wall collisions) + red ring on a stun. */
+  function wallHit(impactSpeed: number, stunned: boolean): void {
+    world.audit.record({
+      kind: 'collision',
+      hit: 'building',
+      position: lastPoint.clone(),
+      impactSpeed,
+      normal: lastNormal.clone(),
+    });
+    if (!stunned) return;
+    const range = Math.min(WALL_IMPACT_RANGE_MAX, WALL_IMPACT_RANGE_BASE + WALL_IMPACT_RANGE_PER_MPS * impactSpeed);
+    world.ping(lastPoint, range, 'impact');
   }
 
   function update(dtRaw: number) {
@@ -298,8 +351,11 @@ function resolveWalls(pos: THREE.Vector3): number {
         velocity.copy(lastNormal).multiplyScalar(Math.max(0, away));
         effect.trigger(duration, 0.5 + 0.5 * t);
         options.onStunned?.(duration, impactSpeed);
+        wallHit(impactSpeed, true);
+        emitStunned(duration, impactSpeed, 0.5 + 0.5 * t, lastPoint, 'wall');
       } else if (impactSpeed >= REBOUND_MIN_IMPACT) {
         effect.trigger(BUMP_EFFECT_DURATION, BUMP_EFFECT_INTENSITY); // light bump: small wobble
+        wallHit(impactSpeed, false);
       }
 
       // ---- 6. Apply horizontal movement ----

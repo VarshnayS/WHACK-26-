@@ -10,6 +10,8 @@
  *   OnsetDetector.step(features, nowMs)        -> 0..n DetectionEvents
  */
 
+import { VOICE_RANGE_SHOUT, VOICE_RANGE_WHISPER } from '../config';
+
 export type DetectionKind = 'transient' | 'sustained';
 
 // =============================================================================================
@@ -21,7 +23,7 @@ export type DetectionKind = 'transient' | 'sustained';
 /** Pulse size multiplier. 1 = normal, 1.5 = everything reaches further, 0.7 = smaller. */
 export const SENSITIVITY = 1.0;
 /** dB above the room's noise you must be to fire a pulse. Lower = triggers on quieter sounds. */
-export const TRIGGER_DB = 15;
+export const TRIGGER_DB = 12;
 /**
  * Learn how loud this mic gets in real time: the loudest recent sound = a full-size pulse.
  * Makes quiet / low-gain mics and noisy rooms feel as responsive as a good mic.
@@ -32,9 +34,12 @@ export const AUTO_RANGE = true;
 export const FIXED_RANGE_DB = 40;
 /** Response curve: < 1 makes quiet/medium sounds give bigger pulses, 1 = linear. */
 export const STRENGTH_CURVE = 0.7;
-/** Smallest / largest pulse reach in metres. */
-export const MIN_RADIUS_M = 10;
-export const MAX_RADIUS_M = 80;
+/**
+ * Smallest / largest pulse reach in metres (the voice ping's range in world.ping): a whisper just
+ * over the trigger, a full shout. Set in REVEAL TUNING (src/config.ts).
+ */
+export const MIN_RADIUS_M = VOICE_RANGE_WHISPER;
+export const MAX_RADIUS_M = VOICE_RANGE_SHOUT;
 
 /** Every tunable for the audio -> sonar module lives here (README "Audio sonar"). */
 export interface DetectorConfig {
@@ -118,8 +123,7 @@ export interface DetectorConfig {
   /** Brightness used for keyboard pulses. */
   keyboardBrightness: number;
 
-  /** Draw each active pulse as an expanding ring (src/sonar/debug-rings.ts) until the shader exists. */
-  debugRings: boolean;
+
 }
 
 export const DETECTOR_CONFIG: DetectorConfig = {
@@ -169,7 +173,6 @@ export const DETECTOR_CONFIG: DetectorConfig = {
   keyboardStrength: 0.5,
   keyboardBrightness: 0.5,
 
-  debugRings: true,
 };
 
 // ---------------------------------------------------------------------------------------------

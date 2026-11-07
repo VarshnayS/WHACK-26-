@@ -10,10 +10,18 @@
  * Coordinates: Y up, metres, +X = west, +Z = north, origin at ORIGIN_LAT/LON, ground ≈ y 0.
  */
 import * as THREE from 'three';
-import { addPing, now, type Ping } from '../render/pings';
-import { MAX_PINGS } from '../render/sonarMaterial';
-import { CAMERA_FAR, CAMERA_NEAR, EYE_HEIGHT, WAVE_SPEED } from '../config';
+import { CAMERA_FAR, CAMERA_NEAR, EYE_HEIGHT } from '../config';
+import { activePings as rankedPings, addPing, expirePings, pingLog } from './pings';
 import { isInsidePlayArea } from './playArea';
+import type {
+  ActivePing,
+  AuditEvent,
+  EntityState,
+  PingType,
+  VisionMode,
+  WorldEventCallback,
+  WorldEventName,
+} from '../shared/contracts';
 
 export type AgentType = 'pedestrian' | 'car';
 
@@ -45,10 +53,10 @@ export interface World {
   /** Live agent list (filled by src/world/agents.ts). */
   readonly agents: Agent[];
   /**
-   * Pings fired in the last few seconds, oldest first (at most MAX_PINGS). Kept here as well as
-   * in src/render/pings.ts so other modules (e.g. entity AI: "last noise position") can read them.
+   * Live pings, oldest first (at most MAX_PINGS), e.g. for the entity AI's "last noise position".
+   * Same pings as activePings(), in firing order. Owned by src/world/pings.ts; read-only.
    */
-  readonly pings: Ping[];
+  readonly pings: ActivePing[];
   /**
    * Copyright strings of the Google tiles currently on screen, most common first
    * (updated in place by src/world/tiles.ts). The HUD must show these with the Google logo.
@@ -60,8 +68,25 @@ export interface World {
    * src/world/playArea.ts also exports clampToPlayArea() to push a position back inside.
    */
   isInsidePlayArea(pos: THREE.Vector3, margin?: number): boolean;
-  /** Fire a sonar wave from `origin` that travels up to `range` metres. */
-  ping(origin: THREE.Vector3, range: number): void;
+  /** Fire a sonar wave from `origin` that travels up to `range` metres. `type` defaults to 'voice'. */
+  ping(origin: THREE.Vector3, range: number, type?: PingType): void;
+  /**
+   * Pings currently travelling, most audible at the player first (player pings always first), at most
+   * MAX_PINGS (src/world/pings.ts). The array is reused every call: read it, don't keep it.
+   */
+  activePings(): ActivePing[];
+  /** Record scoring/accessibility events. No-op until src/audit/ fills it in. */
+  audit: { record(e: AuditEvent): void };
+  /** Current way of seeing. Default: total blindness. src/senses/ changes it through setVision(). */
+  vision: VisionMode;
+  /** Switch to the vision mode with this id. No-op until src/senses/ fills it in. */
+  setVision(id: string): void;
+  /** The entity hunting the player, or null while none exists. src/entity/ sets it. */
+  entity: EntityState | null;
+  /** Tiny event bus. Events: 'caught', 'entityState', 'stunned'. */
+  on(name: WorldEventName, cb: WorldEventCallback): void;
+  off(name: WorldEventName, cb: WorldEventCallback): void;
+  emit(name: WorldEventName, payload?: unknown): void;
   /** Register a per-frame callback. Returns a function that unregisters it. */
   onUpdate(fn: UpdateFn): () => void;
 }
@@ -80,7 +105,17 @@ const agentsGroup = new THREE.Group();
 agentsGroup.name = 'agents';
 scene.add(tilesGroup, agentsGroup, camera);
 
-const pings: Ping[] = [];
+const listeners = new Map<WorldEventName, Set<WorldEventCallback>>();
+
+/** Default vision: total blindness. */
+const BLIND: VisionMode = {
+  id: 'blind',
+  label: 'Total blindness',
+  visibleDistance: 0,
+  fovDeg: 0,
+  centralLossDeg: 0,
+  peripheralLimitDeg: 0,
+};
 
 export const world: World = {
   scene,
@@ -89,29 +124,35 @@ export const world: World = {
   tilesGroup,
   agentsGroup,
   agents: [],
-  pings,
+  pings: pingLog,
   attributions: [],
   isInsidePlayArea,
-  ping(origin, range) {
-    pings.push({ origin: origin.clone(), range, start: now() });
-    if (pings.length > MAX_PINGS) pings.shift();
-    addPing(origin, range); // src/render/pings.ts feeds the sonar material uniforms
+  ping(origin, range, type = 'voice') {
+    // pooled + prioritised by audibility at the player (src/world/pings.ts)
+    addPing(origin, range, type, camera.position);
   },
   onUpdate(fn) {
     updateFns.add(fn);
     return () => updateFns.delete(fn);
   },
+  activePings: () => rankedPings(camera.position),
+  audit: { record() {} },
+  vision: BLIND,
+  setVision() {},
+  entity: null,
+  on(name, cb) {
+    let set = listeners.get(name);
+    if (!set) listeners.set(name, (set = new Set()));
+    set.add(cb);
+  },
+  off(name, cb) {
+    listeners.get(name)?.delete(cb);
+  },
+  emit(name, payload) {
+    // copy first so a callback may call off() on itself
+    for (const cb of [...(listeners.get(name) ?? [])]) cb(payload);
+  },
 };
-
-/** Drop pings whose wave has finished travelling (plus a short fade). */
-function expirePings(): void {
-  const t = now();
-  while (pings.length > 0) {
-    const p = pings[0];
-    if (t - p.start <= p.range / WAVE_SPEED + 2) break;
-    pings.shift();
-  }
-}
 
 /** Runs every registered onUpdate callback. Called only by the main loop in src/main.ts. */
 export function runUpdates(dt: number): void {
