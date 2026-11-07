@@ -6,6 +6,8 @@
  * Pedestrians walk footway/pedestrian/path/steps at ~1.4 m/s; cars drive residential/service/
  * tertiary/unclassified roads at ~8 m/s, offset to the left of the centreline (UK). At a junction
  * each agent picks a random next edge (not the one it came from, unless it's a dead end).
+ * Paths are clipped to the play corridor, so every path ends in a dead end on the boundary wall
+ * where agents turn back; positions are also clamped inside the walls (cars' lane offset, bodies).
  * All meshes use the shared sonarMaterial (debug grid while R is on). Heights come from
  * groundHeight() in src/player/collision.ts.
  */
@@ -13,16 +15,19 @@ import * as THREE from 'three';
 import { world, type Agent, type AgentType } from './index';
 import { buildPathGraph, loadOsm, type PathGraph } from './osm';
 import { assignWorldMaterial, getWorldMaterial, onRevealAllChange } from './debugMaterial';
+import { clampToPlayArea, isInsidePlayArea } from './playArea';
 import { groundHeight } from '../player/collision';
 
 const PEDESTRIAN_COUNT = 15;
 const CAR_COUNT = 6;
 const PEDESTRIAN_HIGHWAYS = ['footway', 'pedestrian', 'path', 'steps'] as const;
+/** Only spawn on connected path networks at least this long (clipping leaves short isolated stubs). */
+const MIN_NETWORK_LENGTH = 40;
 const CAR_HIGHWAYS = ['residential', 'service', 'tertiary', 'unclassified'] as const;
 
-const SPECS: Record<AgentType, { speed: number; speedJitter: number; loudness: number; laneOffset: number }> = {
-  pedestrian: { speed: 1.4, speedJitter: 0.2, loudness: 0.15, laneOffset: 0 },
-  car: { speed: 8, speedJitter: 1, loudness: 0.6, laneOffset: 1.5 }, // metres left of centreline
+const SPECS: Record<AgentType, { speed: number; speedJitter: number; loudness: number; laneOffset: number; halfWidth: number }> = {
+  pedestrian: { speed: 1.4, speedJitter: 0.2, loudness: 0.15, laneOffset: 0, halfWidth: 0.25 },
+  car: { speed: 8, speedJitter: 1, loudness: 0.6, laneOffset: 1.5, halfWidth: 0.9 }, // lane: metres left of centreline
 };
 
 // One shared low-poly geometry per type; base at y = 0 so mesh.position = ground position.
@@ -83,6 +88,10 @@ function place(m: Mover): void {
     left.crossVectors(UP, dir); // left of the direction of travel
     agent.position.addScaledVector(left, offset);
   }
+  // Boundary walls: never let a body poke through (paths already end at the wall).
+  if (!isInsidePlayArea(agent.position, -SPECS[agent.type].halfWidth)) {
+    clampToPlayArea(agent.position, SPECS[agent.type].halfWidth, agent.position);
+  }
   agent.position.y = groundHeight(agent.position);
   agent.velocity.copy(dir).multiplyScalar(m.speed);
 
@@ -90,10 +99,42 @@ function place(m: Mover): void {
   agent.object.rotation.y = Math.atan2(dir.x, dir.z); // local +Z faces the direction of travel
 }
 
+/** Edges of `graph` that belong to connected networks with total length >= minLength (all if none do). */
+function spawnableEdges(graph: PathGraph, minLength: number): PathGraph['edges'] {
+  const component = new Int32Array(graph.positions.length).fill(-1);
+  const lengths: number[] = [];
+  for (let start = 0; start < graph.positions.length; start++) {
+    if (component[start] !== -1) continue;
+    const id = lengths.length;
+    lengths.push(0);
+    const stack = [start];
+    component[start] = id;
+    while (stack.length) {
+      const n = stack.pop()!;
+      for (const m of graph.neighbours[n]) {
+        if (component[m] === -1) {
+          component[m] = id;
+          stack.push(m);
+        }
+      }
+    }
+  }
+  for (const e of graph.edges) lengths[component[e.a]] += e.length;
+  const good = graph.edges.filter((e) => lengths[component[e.a]] >= minLength);
+  return good.length > 0 ? good : graph.edges;
+}
+
+const spawnCache = new WeakMap<PathGraph, PathGraph['edges']>();
+
 /** Spawn one agent on a path graph and return it (already added to world.agents). */
 export function spawnAgent(type: AgentType, graph: PathGraph): Agent | null {
   if (graph.edges.length === 0) return null;
-  const edge = graph.edges[randomInt(graph.edges.length)];
+  let candidates = spawnCache.get(graph);
+  if (!candidates) {
+    candidates = spawnableEdges(graph, MIN_NETWORK_LENGTH);
+    spawnCache.set(graph, candidates);
+  }
+  const edge = candidates[randomInt(candidates.length)];
   const reverse = Math.random() < 0.5;
   const spec = SPECS[type];
 
