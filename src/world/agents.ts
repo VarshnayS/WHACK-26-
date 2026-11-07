@@ -30,6 +30,7 @@ import { clampToPlayArea, isInsidePlayArea } from './playArea';
 import { CAR_GRID_SIZE, PERSON_GRID_SIZE, createAgentMaterial } from './agentMaterial';
 import { HumanoidCrowd, strideLength } from './humanoid';
 import { createContact, verticalCapsuleOverlap, verticalCapsuleVsBox, type Contact } from './agentContacts';
+import { pedestrianFootstep, playerAgentCollision } from './soundSources';
 import { groundGeneration, initGroundField, sampleGround } from './heightField';
 import { isDebugCameraActive } from './debugCamera';
 import { getPlayerController } from '../player/controller';
@@ -772,7 +773,12 @@ function placeWalker(w: Walker, dt: number): void {
   const speed = Math.hypot(vx, vz);
   w.curSpeed += (speed - w.curSpeed) * Math.min(1, 10 * dt);
   if (w.mode !== 'stumble' && speed > 0.2 && dt > 0) w.yaw = turnTowards(w.yaw, Math.atan2(vx, vz), 8, dt);
-  if (w.mode !== 'stumble') w.phase += (Math.PI * 2 * w.curSpeed * dt) / strideLength(w.height);
+  if (w.mode !== 'stumble') {
+    // one gait cycle (2π) = two steps: a footstep each time the phase crosses a multiple of π
+    const step = Math.floor(w.phase / Math.PI);
+    w.phase += (Math.PI * 2 * w.curSpeed * dt) / strideLength(w.height);
+    if (Math.floor(w.phase / Math.PI) !== step) pedestrianFootstep(agent, w.curSpeed);
+  }
 
   const ground = sampleGround(agent.position.x, agent.position.z);
   w.y = Number.isNaN(w.y) ? ground : w.y + (ground - w.y) * Math.min(1, 12 * dt);
@@ -817,6 +823,12 @@ function poseWalkers(): void {
 
 const playerVel = new THREE.Vector3();
 const impulse = new THREE.Vector3();
+const contactPoint = new THREE.Vector3();
+
+/** Approximate contact point: the player's surface along the normal, ~1 m above the agent's base. */
+function contactPointFor(pos: THREE.Vector3, n: THREE.Vector3, agentBaseY: number): THREE.Vector3 {
+  return contactPoint.set(pos.x - n.x * PLAYER_RADIUS, agentBaseY + 1, pos.z - n.z * PLAYER_RADIUS);
+}
 
 /** Push the player (the camera is the player position) out of an overlap, at most MAX_SEPARATION per frame. */
 function separatePlayer(nx: number, nz: number, depth: number): void {
@@ -880,6 +892,7 @@ function updatePlayerContacts(dt: number): void {
     impulse.y = 0;
     if (impulse.length() > CAR_FLING_MAX) impulse.setLength(CAR_FLING_MAX);
     controller.applyImpulse(impulse, { impactSpeed: total, forceStun: true });
+    playerAgentCollision('car', contactPointFor(pos, n, a.position.y), total, n);
     emitAgentNoise(a.position, NOISE_CAR);
   }
 
@@ -914,6 +927,7 @@ function updatePlayerContacts(dt: number): void {
     const push = THREE.MathUtils.clamp(PED_PUSH_RESTITUTION * closing, PED_PUSH_MIN, PED_PUSH_MAX);
     impulse.set(n.x * push, 0, n.z * push);
     controller.applyImpulse(impulse, { impactSpeed: closing });
+    playerAgentCollision('pedestrian', contactPointFor(pos, n, a.position.y), closing, n);
     knockWalker(w, n.x, n.z, push);
     emitAgentNoise(a.position, NOISE_PEDESTRIAN);
   }

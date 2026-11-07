@@ -10,9 +10,8 @@
  * Coordinates: Y up, metres, +X = west, +Z = north, origin at ORIGIN_LAT/LON, ground ≈ y 0.
  */
 import * as THREE from 'three';
-import { addPing, now, type Ping } from '../render/pings';
-import { MAX_PINGS } from '../render/sonarMaterial';
-import { CAMERA_FAR, CAMERA_NEAR, EYE_HEIGHT, WAVE_SPEED } from '../config';
+import { CAMERA_FAR, CAMERA_NEAR, EYE_HEIGHT } from '../config';
+import { activePings as rankedPings, addPing, expirePings, pingLog } from './pings';
 import { isInsidePlayArea } from './playArea';
 import type {
   ActivePing,
@@ -54,10 +53,10 @@ export interface World {
   /** Live agent list (filled by src/world/agents.ts). */
   readonly agents: Agent[];
   /**
-   * Pings fired in the last few seconds, oldest first (at most MAX_PINGS). Kept here as well as
-   * in src/render/pings.ts so other modules (e.g. entity AI: "last noise position") can read them.
+   * Live pings, oldest first (at most MAX_PINGS), e.g. for the entity AI's "last noise position".
+   * Same pings as activePings(), in firing order. Owned by src/world/pings.ts; read-only.
    */
-  readonly pings: Ping[];
+  readonly pings: ActivePing[];
   /**
    * Copyright strings of the Google tiles currently on screen, most common first
    * (updated in place by src/world/tiles.ts). The HUD must show these with the Google logo.
@@ -71,7 +70,10 @@ export interface World {
   isInsidePlayArea(pos: THREE.Vector3, margin?: number): boolean;
   /** Fire a sonar wave from `origin` that travels up to `range` metres. `type` defaults to 'voice'. */
   ping(origin: THREE.Vector3, range: number, type?: PingType): void;
-  /** Pings currently travelling (src/shared/contracts.ts). Empty until the sonar owner fills it in. */
+  /**
+   * Pings currently travelling, most audible at the player first (player pings always first), at most
+   * MAX_PINGS (src/world/pings.ts). The array is reused every call: read it, don't keep it.
+   */
   activePings(): ActivePing[];
   /** Record scoring/accessibility events. No-op until src/audit/ fills it in. */
   audit: { record(e: AuditEvent): void };
@@ -103,7 +105,6 @@ const agentsGroup = new THREE.Group();
 agentsGroup.name = 'agents';
 scene.add(tilesGroup, agentsGroup, camera);
 
-const pings: Ping[] = [];
 const listeners = new Map<WorldEventName, Set<WorldEventCallback>>();
 
 /** Default vision: total blindness. */
@@ -123,20 +124,18 @@ export const world: World = {
   tilesGroup,
   agentsGroup,
   agents: [],
-  pings,
+  pings: pingLog,
   attributions: [],
   isInsidePlayArea,
-  ping(origin, range, _type = 'voice') {
-    // `_type` is part of the contract; the sonar owner will use it for per-type styles.
-    pings.push({ origin: origin.clone(), range, start: now() });
-    if (pings.length > MAX_PINGS) pings.shift();
-    addPing(origin, range); // src/render/pings.ts feeds the sonar material uniforms
+  ping(origin, range, type = 'voice') {
+    // pooled + prioritised by audibility at the player (src/world/pings.ts)
+    addPing(origin, range, type, camera.position);
   },
   onUpdate(fn) {
     updateFns.add(fn);
     return () => updateFns.delete(fn);
   },
-  activePings: () => [],
+  activePings: () => rankedPings(camera.position),
   audit: { record() {} },
   vision: BLIND,
   setVision() {},
@@ -154,16 +153,6 @@ export const world: World = {
     for (const cb of [...(listeners.get(name) ?? [])]) cb(payload);
   },
 };
-
-/** Drop pings whose wave has finished travelling (plus a short fade). */
-function expirePings(): void {
-  const t = now();
-  while (pings.length > 0) {
-    const p = pings[0];
-    if (t - p.start <= p.range / WAVE_SPEED + 2) break;
-    pings.shift();
-  }
-}
 
 /** Runs every registered onUpdate callback. Called only by the main loop in src/main.ts. */
 export function runUpdates(dt: number): void {
