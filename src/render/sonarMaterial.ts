@@ -20,7 +20,9 @@
  * should use createSonarMaterial({ gridSpace: 'object' }): the grid is fixed to the object, so lines
  * travel with it instead of sliding over it. InstancedMesh is supported in both modes.
  *
- * White on black only: never output colour.
+ * White on black, with ONE exception (AGENTS.md rule 9): red is allowed for stuns and danger.
+ * A ping with a colour (uPingC, from src/render/pingColors.ts; 'impact' = red) tints the lines it
+ * reveals; it overrides white, so it still shows during reveal-all (R) and inside other reveals.
  */
 import * as THREE from 'three';
 import { MAX_PINGS } from '../shared/contracts';
@@ -54,6 +56,8 @@ export type SonarUniforms = {
   uPingA: THREE.IUniform<THREE.Vector4[]>;
   /** Per ping: x = range (m), y = ring thickness (m), z = brightness 0..1, w = trail fade per metre. */
   uPingB: THREE.IUniform<THREE.Vector4[]>;
+  /** Per ping: rgb = colour, w = 1 if coloured (red for stuns/danger), 0 = plain white. */
+  uPingC: THREE.IUniform<THREE.Vector4[]>;
   /** 1 = debug "reveal everything" (R key): full grid, no sonar mask. */
   uRevealAll: THREE.IUniform<number>;
   /**
@@ -78,6 +82,7 @@ export const sonarUniforms: SonarUniforms = {
   uPingCount: { value: 0 },
   uPingA: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector4()) },
   uPingB: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector4()) },
+  uPingC: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector4()) },
   uRevealAll: { value: 0 },
   uWaveSpeed: { value: WAVE_SPEED },
   uPingOrigin: { value: Array.from({ length: MAX_PINGS }, () => new THREE.Vector3()) },
@@ -114,6 +119,7 @@ const fragmentShader = /* glsl */ `
   uniform int uPingCount;
   uniform vec4 uPingA[MAX_PINGS];
   uniform vec4 uPingB[MAX_PINGS];
+  uniform vec4 uPingC[MAX_PINGS];
   uniform float uRevealAll;
   varying vec3 vWorldPos;
   varying vec3 vGridPos;
@@ -145,8 +151,12 @@ const fragmentShader = /* glsl */ `
     float dBody = length(toEye + vec3(0.0, below, 0.0));
     reveal = max(reveal, 1.0 - smoothstep(uArmReach * ARM_REACH_SOFT, uArmReach, dBody));
 
+    // coloured pings (red = stun/danger): strongest one wins, and it overrides white
+    float tintAmt = 0.0;
+    vec3 tint = vec3(1.0);
+
     for (int i = 0; i < MAX_PINGS; i++) {
-      if (i >= uPingCount || reveal >= 1.0) break;
+      if (i >= uPingCount || (reveal >= 1.0 && tintAmt >= 1.0)) break;
       vec4 a = uPingA[i]; // origin, radius
       vec4 b = uPingB[i]; // range, thickness, brightness, fade per metre
       float d = distance(vWorldPos, a.xyz);
@@ -157,10 +167,18 @@ const fragmentShader = /* glsl */ `
       float trail = x < 0.0 ? TRAIL_LEVEL * exp(x * b.w) : 0.0;
       float edge = 1.0 - smoothstep(b.x * 0.8, b.x, d); // soft clip at the range
       float falloff = 1.0 - 0.5 * d / b.x;               // the wave weakens as it spreads
-      reveal = max(reveal, max(ring, trail) * b.z * edge * falloff);
+      float v = max(ring, trail) * b.z * edge * falloff;
+      vec4 c = uPingC[i];
+      if (c.w > 0.5) {
+        if (v > tintAmt) { tintAmt = v; tint = c.rgb; }
+      } else {
+        reveal = max(reveal, v);
+      }
     }
 
-    gl_FragColor = vec4(vec3(grid * min(reveal, 1.0)), 1.0);
+    tintAmt = min(tintAmt, 1.0);
+    vec3 col = mix(vec3(min(reveal, 1.0)), tint, tintAmt);
+    gl_FragColor = vec4(grid * col, 1.0);
   }
 `;
 

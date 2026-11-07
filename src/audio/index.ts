@@ -6,15 +6,18 @@
  *
  * Keys:  SPACE  medium transient pulse (works without a mic)
  *        ⇧SPACE max-strength pulse
- *        C      recalibrate the noise floor
+ *        ⇧C     recalibrate the noise floor (plain C holds the cane: src/senses/cane.ts)
  *        M      mute / unmute the mic
  *        `      toggle the debug meter
  *        [ ]    sensitivity down / up      - =  trigger level down / up      0  reset (./tuning.ts)
+ *        U      mute the soundscape        , .  volume down / up (./soundscape.ts)
  */
 import * as THREE from 'three';
 import { world as sharedWorld } from '../world';
 import { EYE_HEIGHT } from '../config';
 import { emitNoise, emitPulse, getActivePulses, pulseNow } from '../sonar/pulses';
+import type { PingType } from '../shared/contracts';
+import { initSoundscape } from './soundscape';
 import { createDebugRings, type DebugRings } from '../sonar/debug-rings';
 import { Calibrator } from './calibration';
 import { DebugMeter, type MeterSnapshot } from './debug-meter';
@@ -48,6 +51,8 @@ export interface SonarWorld {
   readonly scene: THREE.Scene;
   readonly camera: THREE.Camera;
   onUpdate(fn: (dt: number) => void): () => void;
+  /** The contract's ping (src/shared/contracts.ts): the only thing the sonar shader draws. */
+  ping(origin: THREE.Vector3, range: number, type?: PingType): void;
 }
 
 type Status =
@@ -201,6 +206,10 @@ class AudioSonar {
 
   private firePlayerPulse(e: DetectionEvent): void {
     this.world.camera.getWorldPosition(this.playerPos);
+    // The shader only draws world.activePings(), so this is what makes the voice visible.
+    // (Before: the mic only fed the legacy src/sonar/pulses.ts bus, which nothing renders.)
+    this.world.ping(this.playerPos, e.maxRadius, 'voice');
+    // Legacy bus, kept for onPulse() subscribers and the optional debug rings.
     emitPulse({
       origin: this.playerPos, // the bus copies it
       speed: e.speed,
@@ -320,7 +329,7 @@ class AudioSonar {
         this.meter.toggle();
         break;
       case 'KeyC':
-        this.beginCalibration();
+        if (e.shiftKey) this.beginCalibration(); // plain C = cane (src/senses/cane.ts)
         break;
       case 'KeyM':
         this.toggleMute();
@@ -347,6 +356,7 @@ export async function initAudioSonar(world: SonarWorld): Promise<void> {
 
 /** Entry point used by src/main.ts. */
 export function initMic(): Promise<void> {
+  initSoundscape(sharedWorld);
   return initAudioSonar(sharedWorld);
 }
 

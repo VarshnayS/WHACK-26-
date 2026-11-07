@@ -148,7 +148,7 @@ export class DebugMeter {
     g.fillText(this.eventText, 8, 92);
     g.fillText(PULSE_COUNT_TEXT[Math.min(s.activePulses, PULSE_COUNT_TEXT.length - 1)], 8, 108);
     g.fillStyle = '#888';
-    g.fillText('SPACE ping  C calibrate  M mute  [ ] sens  - = trig', 8, 122);
+    g.fillText('SPACE ping  ⇧C calibrate  M mute  [ ] sens  - = trig', 8, 122);
   }
 
   dispose(): void {

@@ -4,7 +4,7 @@
 // rotation, because PointerLockControls owns it and would bake any offset into the
 // player's look direction. Instead it uses:
 //   - CSS roll / sway / zoom + blur on the WebGL canvas
-//   - a brief white flash overlay (the screen is black, so a flash reads as "ouch")
+//   - a brief dark-red flash overlay (red = stuns/danger only; the HUD adds the red edge vignette)
 //   - a head dip value the controller subtracts from camera height
 //
 // Usage:
@@ -27,14 +27,14 @@ const MAX_BLUR_PX = 5;
 const MAX_ZOOM = 0.05;
 const MAX_HEAD_DIP = 0.25;
 const FLASH_DURATION = 0.18;
-const FLASH_OPACITY = 0.45;
+const FLASH_OPACITY = 0.3;
 
 export function createStunEffect(canvas: HTMLCanvasElement): StunEffect {
   const flash = document.createElement('div');
   Object.assign(flash.style, {
     position: 'fixed',
     inset: '0',
-    background: '#fff',
+    background: '#b00000',
     opacity: '0',
     pointerEvents: 'none',
     zIndex: '10',

@@ -7,12 +7,16 @@
  * must always stay visible (README "Attribution"); don't remove it.
  */
 
+import { initStunVignette } from './stunVignette';
+
 let tileAttributionEl: HTMLElement | null = null;
 
 /** Build the HUD inside #hud and register FPS updates with world.onUpdate(). */
 export function initHud(): void {
   const root = document.getElementById('hud');
   if (!root) return;
+
+  initStunVignette(root);
 
   const attribution = document.createElement('div');
   attribution.style.cssText = 'position:absolute;right:8px;bottom:8px;text-align:right;';
