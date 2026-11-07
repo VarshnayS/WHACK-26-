@@ -74,7 +74,14 @@ Check the proxy works by opening http://localhost:8787/v1/3dtiles/root.json. You
 |---|---|
 | Click | Lock the mouse (first-person look) |
 | WASD | Walk |
-| Space | Test sonar ping (until the mic is wired in) |
+| First click | Also enables the mic (browser permission prompt), then ~1.5 s calibration: stay quiet |
+| Space / Shift+Space | Medium / max-strength sonar pulse (works with no mic) |
+| C | Recalibrate the mic noise floor |
+| M | Mute / unmute the mic |
+| [ / ] | Mic sensitivity down / up (pulse size; saved per browser) |
+| - / = | Mic trigger level down / up (dB above room noise; saved per browser) |
+| 0 | Reset mic tuning to the defaults |
+| ` (backtick) | Audio debug meter |
 | F | Toggle the free-fly debug camera |
 | R | Debug: reveal everything (full grid, no sonar mask), for checking alignment |
 | Esc | Release the mouse |
@@ -85,29 +92,43 @@ Check the proxy works by opening http://localhost:8787/v1/3dtiles/root.json. You
 
 Tiles stream through `proxy/cache-proxy.mjs`, which adds the API key server-side and saves every tile to `tile-cache/`.
 
+Only tiles touching the play corridor (plus `CORRIDOR_TILE_MARGIN`) are loaded. Every tile inside the corridor loads at Google's finest level whichever way you look, so one visit warms the whole corridor.
+
+**Sessions (why the proxy reuses one):** Google's tile file paths are different in every session, so cached tiles only match the session whose `root.json` points to them. The proxy therefore keeps **one session for 150 minutes** (`SESSION_MAX_AGE_MIN`; Google sessions last about 3 hours). Page reloads and proxy restarts within that window reuse the cached `root.json`, so tiles come from the cache. After that the proxy starts a new session and keeps the previous root as `tile-cache/v1/3dtiles/root.<timestamp>.json`. Watch for `[session] new Google session started` in the proxy log. `SESSION_MAX_AGE_MIN=0` starts a new session on every load.
+
 **Warming the cache before the demo:**
 
-1. Run the proxy online (`OFFLINE=0`).
-2. Press **R** (reveal all) and walk or fly the **whole playable route** at eye height (1.7 m), looking in every direction. Tile detail depends on camera distance, so anything you don't see up close won't be cached at full detail.
-3. Restart the proxy with `OFFLINE=1` and replay the route. Each `[offline miss]` in the proxy log is a gap: go back online and cover that spot.
-
-**Session gotcha:** `root.json` is cached too, and its session token expires after about 3 hours. Cached tiles keep working, but new areas will fail. Delete the cached `root.json` entry (or clear `tile-cache/`) before warming new areas.
+1. Optionally clear `tile-cache/` so it only holds the session you're about to warm.
+2. Run `npm run dev:all` online (`OFFLINE=0`), open the game and wait about 30 s until the proxy's `[stats]` line stops growing.
+3. Optional check: press **R** then **F**, walk University Road at eye height (**G** drops you to 1.7 m) and wait for `loading no` in the debug readout.
+4. Finish within 150 minutes of the `[session] new Google session started` line. If a new session started after you'd warmed, copy the newest `root.<timestamp>.json` over `tile-cache/v1/3dtiles/root.json`.
+5. Restart with `OFFLINE=1 npm run dev:all` and reload. Each `[offline miss]` in the proxy log is a gap: go back online (within the same session) and load that spot.
+6. Zip `tile-cache/` as a backup and run the demo with `OFFLINE=1`. If you change any `CORRIDOR_*` value, re-run `npm run fetch:osm` and warm again.
 
 ### OpenStreetMap (pedestrian and car paths)
 
 ```bash
-node scripts/fetch-osm.mjs   # saves public/osm.json
+npm run fetch:osm                             # saves public/osm.json
+node scripts/road-bearing.mjs "University Road"   # measures CORRIDOR_BEARING from OSM
 ```
 
-Run this once (online). The game reads `public/osm.json`, so agents work offline. OSM is openly licensed, so storing it is fine.
+Run `fetch:osm` online whenever the origin or corridor changes; `public/osm.json` is committed, so agents work offline. The script reads the origin and corridor from `src/config.ts`, queries every highway way in the corridor's bounding box, and clips the ways to the corridor. Where a way crosses the boundary, a node is added on it. OSM is openly licensed (© OpenStreetMap contributors, ODbL), so storing it is fine.
 
-### Setting the location
+### Setting the location and play area
 
 Edit `src/config.ts`:
 
-- `ORIGIN_LAT`, `ORIGIN_LON`: the street the game is centred on
+- `ORIGIN_LAT`, `ORIGIN_LON`: the street the game is centred on (currently 52.380282, -1.559057, outside the Oculus on University Road)
+- `ORIGIN_HEIGHT`: ground height at the origin above the WGS84 ellipsoid, so the ground sits at y = 0 (132.9 m). `AUTO_GROUND` corrects small errors; re-measure if you move the origin.
+- **Play corridor** (replaces the old circular `PLAY_RADIUS`): a straight rectangle centred on the origin. It limits tile loading, the OSM fetch, agents and the boundary walls (`world.isInsidePlayArea`).
+  - `CORRIDOR_LENGTH`: metres along the road (200)
+  - `CORRIDOR_HALF_WIDTH`: metres either side of the centre line (40)
+  - `CORRIDOR_BEARING`: road direction in degrees clockwise from north (29.0, measured with `scripts/road-bearing.mjs`)
+  - `CORRIDOR_TILE_MARGIN`: tiles also load this far beyond the walls so edges don't pop (15)
+- `TILES_ERROR_TARGET`: screen-space error for what the camera sees; lower = more detail (2)
+- `CORRIDOR_MIN_DETAIL`: every tile in the corridor refines to at most this geometric error even off-screen (2.1 = Google's finest here)
+- `PLAY_RADIUS`: **deprecated**, kept only so old code compiles; it's now the radius of the circle around the corridor. `TILE_LOAD_RADIUS` has been **removed**.
 - `YAW_OFFSET`, `XZ_OFFSET`: tweak until OSM roads line up with the tile grid (use F + R)
-- `PLAY_RADIUS`: playable area in metres (default about 250 m)
 - `GRID_SIZE`: spacing of the world-space grid lines in metres (default 0.5)
 - `ARM_REACH`: always-visible radius around the player in metres (default 0.4)
 
@@ -115,19 +136,27 @@ Edit `src/config.ts`:
 
 ```
 proxy/cache-proxy.mjs      tile cache proxy
-scripts/fetch-osm.mjs      downloads OSM paths/roads to public/osm.json
+scripts/fetch-osm.mjs      downloads OSM paths/roads in the corridor to public/osm.json
+scripts/road-bearing.mjs   measures CORRIDOR_BEARING from a named OSM road
+scripts/lib/               shared helpers for the OSM scripts
 scripts/dev-all.mjs        runs proxy + vite together (no extra deps)
 src/
   main.ts                  renderer (black clear colour) + main loop
-  config.ts                location, offsets, radius, grid, arm reach
+  config.ts                location, corridor, detail, grid, arm reach
   render/sonarMaterial.ts  THE shared material: grid lines x sonar mask
   render/pings.ts          active pings -> shader uniforms
   world/index.ts           exports the shared `world` object
   world/tiles.ts           loads tiles, strips textures, applies shared material
   world/osm.ts             OSM loading + lat/lon to local metres
-  world/agents.ts          pedestrians (capsules) and cars (boxes)
+  world/agents.ts          pedestrians + cars: paths, groups, crossings, player contacts
+  world/humanoid.ts        procedural walking people, one InstancedMesh per body part
+  world/agentMaterial.ts   sonar material for agents (object-space grid, instancing)
+  world/agentContacts.ts   capsule / oriented-box contact tests (no raycasts)
+  world/heightField.ts     precomputed ground height grid agents stand on
+  world/playArea.ts        play corridor: isInsidePlayArea, clampToPlayArea
+  world/debug*.ts          R reveal-all grid, F free-fly camera, debug readout
   player/controller.ts     first-person movement
-  player/collision.ts      collision + ground stubs (to be implemented)
+  player/collision.ts      raycast wall + ground collision against world.tilesGroup
   hud/hud.ts               FPS + attribution overlay
 ```
 
@@ -170,16 +199,123 @@ world.tilesGroup     // Google tile geometry
 world.agentsGroup    // pedestrians + cars
 world.agents         // [{ type, position, velocity, loudness }]
 world.ping(origin, range)          // fire a sonar wave
+world.isInsidePlayArea(pos)        // false beyond the corridor walls (player must not go there)
 world.onUpdate((dt) => { /* runs every frame */ });
 ```
 
 | Feature | Where to plug in |
 |---|---|
 | **Sonar look** | Tune `src/render/sonarMaterial.ts` (wave speed, ring width, fade, grid density). Don't add per-object materials. |
-| **Mic** | `src/audio/mic.ts`: Web Audio `getUserMedia` + `AnalyserNode`. Calibrate ambient noise on start; above baseline + ~15 dB, call `world.ping(playerPos, rangeFromDb)`. Mic needs `localhost` or HTTPS. |
-| **Collision** | Fill in `checkCollision(pos, dir)` and `groundHeight(pos)` in `src/player/collision.ts` (raycasts against `world.tilesGroup`, which works on geometry with no textures). Add `three-mesh-bvh` only if FPS drops. |
+| **Mic** | Done: see "Audio sonar" below. Mic needs `localhost` or HTTPS. |
+| **Collision** | Done: `src/player/collision.ts` raycasts only against `world.tilesGroup`; the controller also keeps the player inside the corridor. `getPlayerController().applyImpulse(vec, { impactSpeed, forceStun })` pushes the player through the normal momentum/friction/wall-sliding and stuns with the same thresholds as wall hits. Add `three-mesh-bvh` only if FPS drops. |
 | **Spatial audio** | Attach `THREE.PositionalAudio` to each entry in `world.agents` (footsteps, engines). |
 | **Entity AI** | Use the OSM path graph from `src/world/osm.ts` for pathfinding; move towards the player's last noise position. Render it with the shared material too. |
+
+## Audio sonar (mic → pulses)
+
+`src/audio/` turns mic noise into sonar pulses; `src/sonar/pulses.ts` is the pulse bus everyone shares.
+
+```
+mic.ts (getUserMedia, AGC/NS/EC off) → AnalyserNode (fft 2048, no smoothing, not connected to speakers)
+  → detector.ts FeatureExtractor: RMS dBFS, peak, spectral centroid, spectral flux
+  → detector.ts OnsetDetector.step(features, nowMs): adaptive noise floor, onset + classification
+  → index.ts: emitPulse(...) + emitNoise(...) from the camera position
+```
+
+### The Pulse contract (`src/sonar/pulses.ts`; keep it stable)
+
+```ts
+type PulseSource = 'player' | 'agent' | 'enemy' | 'debug';
+interface Pulse {
+  id: number; origin: THREE.Vector3; startTime: number; // s, performance.now()/1000
+  speed: number; maxRadius: number;                     // m/s, m
+  strength: number; brightness: number;                 // 0..1 (brightness = spectral centroid)
+  kind: 'transient' | 'sustained'; source: PulseSource;
+}
+emitPulse(p: Omit<Pulse, 'id' | 'startTime'>): Pulse   // anyone can call it: engines, footsteps, AI…
+onPulse(cb): unsubscribe
+getActivePulses(now): Array<Pulse & { radius; age; fade }>
+MAX_ACTIVE_PULSES = 16                                  // oldest dropped beyond this
+```
+
+- `transient` (clap, click): fast (45 m/s), crisp. `sustained` (shout, hum held > 300 ms): slower (25 m/s), should look wider; it repeats at half strength every 400 ms while held.
+- Pulses expire once `radius >= maxRadius`. `fade` is 1 at birth and falls linearly to 0 at `maxRadius`.
+- The bus copies `origin`, so callers can pass a reused vector.
+
+**Shader teammate:** once per frame, read the pulses into your fixed-size uniform arrays:
+
+```ts
+import { getActivePulses, MAX_ACTIVE_PULSES } from '../sonar/pulses';
+const pulses = getActivePulses(performance.now() / 1000);  // ≤ MAX_ACTIVE_PULSES, oldest first
+for (let i = 0; i < MAX_ACTIVE_PULSES; i++) {
+  const p = pulses[i];
+  // p ? write p.origin, p.radius, p.maxRadius, p.strength, p.brightness, p.fade, p.kind : mark slot unused
+}
+```
+
+The returned array and its objects are **reused on every call** (no per-frame garbage), so copy values out and don't keep references. Until the shader reads this, `DETECTOR_CONFIG.debugRings` draws each pulse as a ring on the ground (`src/sonar/debug-rings.ts`; delete the file and its one use in `src/audio/index.ts` when it's no longer needed). Note: this bus is separate from the older `world.ping()` / `src/render/pings.ts` path, and mic pulses don't go through `world.ping()`.
+
+**Enemy AI teammate:** subscribe to noise events. They fire on every player sound (each mic detection, including sustained repeats, and SPACE pulses):
+
+```ts
+import { onNoise } from '../sonar/pulses';
+const off = onNoise(({ position, loudness, time }) => {
+  // position: copy of the player position (safe to keep), loudness 0..1, time in s (pulse clock)
+});
+```
+
+Event only, no AI logic. `emitNoise(position, loudness)` is exported too if other noises should be audible to the AI.
+
+### Tuning for your mic and room
+
+Every mic and room is different, so the detector adapts in real time at both ends:
+
+- **Room noise (low end):** C runs a 1.5 s silent calibration, then the noise floor keeps following the room whenever you're quiet (fan on, window open…).
+- **Mic loudness (high end), auto-range:** the loudest recent sound (+3 dB) counts as a full-size pulse. Louder sounds raise it instantly; each quieter sound pulls it down 30 %, and it also relaxes 0.5 dB/s, so a quiet or low-gain mic reaches full-size pulses after a few sounds. It's capped by the mic's headroom. C also resets it (new mic = press C).
+
+**In game:** `[` `]` change sensitivity and `-` `=` change the trigger level. Changes show in the HUD, are saved per browser (localStorage) so each teammate keeps settings for their own mic, and `0` resets them.
+
+**In code:** the QUICK TUNING block at the top of `src/audio/detector.ts`:
+
+| Constant | Default | Meaning |
+|---|---|---|
+| `SENSITIVITY` | 1.0 | Pulse size multiplier. Pulses feel weak → 1.3–1.5 |
+| `TRIGGER_DB` | 15 | dB above room noise needed to fire. Quiet sounds missed → 10–12; typing triggers → 20+ |
+| `AUTO_RANGE` | true | Learn the mic's loudness. `false` = fixed scale of `FIXED_RANGE_DB` |
+| `FIXED_RANGE_DB` | 40 | Only without auto-range: dB above the trigger that counts as full size |
+| `STRENGTH_CURVE` | 0.7 | < 1 boosts quiet/medium sounds, 1 = linear |
+| `MIN_RADIUS_M`, `MAX_RADIUS_M` | 10, 80 | Smallest / largest pulse reach |
+
+Open the meter with backtick: green bar = RMS, white line = noise floor, red line = trigger threshold, blue line = learned full-strength level, flash = detection. The blue line text (`full @ +NN dB`) shows how far above the room noise a sound must be to make a full-size pulse.
+
+### All knobs (`DETECTOR_CONFIG` in `src/audio/detector.ts`)
+
+| Knob | Default | Turn it… |
+|---|---|---|
+| `thresholdDb` | 15 | up if typing / background noise triggers; down if claps are missed |
+| `refractoryMs` | 250 | up if one clap gives two pulses |
+| `fluxMin` | 0.35 | up if slow swells trigger; down if soft onsets are missed |
+| `transientDropDb`, `sustainMs` | 12 dB, 300 ms | control transient vs sustained; raise `sustainMs` if claps in a reverberant room read as sustained |
+| `sustainRepeatMs`, `sustainRepeatScale` | 400 ms, 0.5 | rate and size of pulses while a sound is held |
+| `autoRangeStartDb`, `autoRangeHeadroomDb`, `autoRangeLearnRate`, `autoRangeDecayDbPerS` | 45 dB, 3 dB, 0.3, 0.5 dB/s | auto-range: starting full-strength level, how it learns up/down |
+| `autoRangeMinSpanDb`, `ceilingDb` | 12 dB, -6 dBFS | auto-range limits: tiny sounds can't max out; mic headroom cap |
+| `minRadius`, `maxRadius` | 10, 80 m | pulse reach at strength 0 / 1 |
+| `transientSpeed`, `sustainedSpeed` | 45, 25 m/s | wave speed per kind |
+| `floorRiseTauS`, `floorFallTauS` | 4, 0.6 s | how fast the noise floor adapts while quiet |
+| `calibrationMs` | 1500 | silent calibration length (C reruns it) |
+| `keyboardStrength` | 0.5 | SPACE strength (Shift+SPACE is always 1) |
+| `debugRings` | true | temporary ring visualiser |
+
+Clap pulses fire when the clap's energy dies away (about 80 ms), so loudness is measured over the whole clap. `dispose()` from `src/audio` stops the mic tracks, closes the AudioContext and removes the overlay and listeners.
+
+## Agents (pedestrians and cars)
+
+- `PEDESTRIAN_COUNT` / `CAR_COUNT` in `src/config.ts`. Pedestrians are procedural low-poly humanoids (1.6 to 1.9 m, 1.1 to 1.6 m/s) drawn with one `InstancedMesh` per body part and a sine-wave walk cycle; some walk in groups of 2 to 3, some loiter, some cross University Road, and they lightly avoid each other.
+- **Player contact** is checked every frame with shapes, not raycasts: the player is a 0.3 m capsule, pedestrians are capsules, cars are 4.4 x 1.5 x 1.8 m oriented boxes.
+  - Pedestrian: player and pedestrian get an equal and opposite push along the contact normal; the pedestrian stumbles for 1.5 s, then walks back to the nearest point on its path. The player is stunned if the closing speed passes the wall-hit threshold.
+  - Car: never reacts and keeps driving. The player is flung along the normal plus part of the car's velocity, scaled by car speed + player speed, and always stunned.
+- Agents stand on a ground height grid (every 2 m) built from `groundHeight()` after the tiles load, so there is no per-agent raycast.
+- Noise: every agent collision should call `world.emitNoise(position, loudness)` (cars 0.9, pedestrians 0.5). That function does not exist on `world` yet, so `agents.ts` calls it only if present (`TODO(world.emitNoise)`).
 
 ## Attribution (must stay visible)
 
@@ -199,9 +335,10 @@ The HUD is a normal HTML overlay, so it stays visible even though the 3D scene i
 |---|---|
 | Totally black, even with R | Check the proxy log. `[upstream 403]` means the Map Tiles API isn't enabled, billing isn't attached, or the key is restricted to the wrong API |
 | Tiles show colour | A tile loaded before the material swap ran: make sure the swap is in the tiles `load-model` event, not a one-off pass |
-| Tiles stop loading in new areas | Session expired: clear the cached `root.json` and reload |
+| Tiles stop loading in new areas | Areas outside the corridor never load: change `CORRIDOR_*` in `src/config.ts`. Inside it, check the proxy log for `[upstream 4xx]` (expired session: the proxy starts a new one after 150 min) |
+| `[offline miss]` for tiles you'd warmed | The cached `root.json` is from a newer session. Copy the warmed session's `tile-cache/v1/3dtiles/root.<timestamp>.json` over `root.json` |
 | `--env-file` not recognised | Upgrade Node to 20.6+ |
-| Grid lines shimmer far away | Normal with dense meshes; reduce `PLAY_RADIUS` or fade the grid with distance in the shader |
-| Agents float or sit underground | Ground stub returns 0 until collision is implemented; adjust height in config for now |
+| Grid lines shimmer far away | Normal with dense meshes; shorten `CORRIDOR_LENGTH` or fade the grid with distance in the shader |
+| Agents float or sit underground | Agents use the height grid from `src/world/heightField.ts`, built a few seconds after the tiles finish loading (the console prints `[ground] height grid ready`); until then they sit at y = 0 |
 | OSM roads don't line up with tiles | Adjust `YAW_OFFSET` / `XZ_OFFSET` in `src/config.ts` with F + R |
 | Mic doesn't work | Must be served from `localhost` or HTTPS; check browser permissions |
