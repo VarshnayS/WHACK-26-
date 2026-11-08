@@ -42,6 +42,7 @@ export interface GoalReachedInfo {
 const route: Route = { start: { x: 0, z: 0 }, goal: null };
 const changeListeners = new Set<(r: Readonly<Route>) => void>();
 const goalListeners = new Set<(info: GoalReachedInfo) => void>();
+const runListeners = new Set<() => void>();
 
 let runStartedAt = -1;
 let goalDone = false;
@@ -126,6 +127,12 @@ export function onRouteChange(fn: (r: Readonly<Route>) => void): () => void {
   return () => changeListeners.delete(fn);
 }
 
+/** Called when a run starts, its goal is reached, or it ends (isRunActive() has the new state). Returns unsubscribe. */
+export function onRunChange(fn: () => void): () => void {
+  runListeners.add(fn);
+  return () => runListeners.delete(fn);
+}
+
 /** Called once per run when the player reaches the goal. Returns unsubscribe. */
 export function onGoalReached(fn: (info: GoalReachedInfo) => void): () => void {
   goalListeners.add(fn);
@@ -151,6 +158,14 @@ export function applyRouteStart(): void {
     watching = true;
     world.onUpdate(checkGoal);
   }
+  for (const fn of runListeners) fn();
+}
+
+/** The run is over and the menu is back (Quit to Menu, or after being caught). */
+export function endRun(): void {
+  runStartedAt = -1;
+  goalDone = false;
+  for (const fn of runListeners) fn();
 }
 
 function checkGoal(): void {
@@ -164,4 +179,5 @@ function checkGoal(): void {
   const info: GoalReachedInfo = { goal: { x: goal.x, z: goal.z }, seconds: (performance.now() - runStartedAt) / 1000 };
   console.info(`[route] goal reached in ${info.seconds.toFixed(1)} s`);
   for (const fn of goalListeners) fn(info);
+  for (const fn of runListeners) fn();
 }
