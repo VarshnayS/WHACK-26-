@@ -22,6 +22,7 @@ import { onCaneContact } from '../senses/cane';
 import { onPlayerImpact, type PlayerImpact } from './controller';
 import { getActivePad, onPadChange } from './input';
 import { showInputMessage } from '../hud/inputHud';
+import type { TactileKind } from '../shared/contracts';
 
 /** A dual-rumble effect. Magnitudes 0..1, duration in ms. */
 export interface Rumble {
@@ -31,7 +32,7 @@ export interface Rumble {
 }
 
 /** Higher wins while it's playing. Future: footstep: 0, heartbeat: 2. */
-const PRIORITY = { cane: 1, impact: 3, test: 4 } as const;
+const PRIORITY = { cane: 1, tactile: 1, impact: 3, test: 4 } as const;
 export type HapticChannel = keyof typeof PRIORITY;
 
 // --- mapping (tuning) --------------------------------------------------------------------------
@@ -127,6 +128,29 @@ export function rumble(channel: HapticChannel, r: Rumble): boolean {
       }
     });
   return true;
+}
+
+// --- texture pattern ---------------------------------------------------------------------------
+
+/** Quick weak pulses, so paving feels different from a collision. Blister = fast and bumpy, guidance = slower ribs. */
+const TEXTURE = {
+  blister: { pulses: 5, gapMs: 60, pulseMs: 25, weak: 0.35 },
+  guidance: { pulses: 3, gapMs: 90, pulseMs: 30, weak: 0.22 },
+} as const;
+const TEXTURE_SOFT = 0.6;
+let textureTimer = 0;
+
+/** Play the tactile paving buzz. `soft` = felt through the feet. No-op without a controller. */
+export function tactileTextureRumble(kind: TactileKind, soft: boolean): void {
+  const t = TEXTURE[kind];
+  const pulse: Rumble = { duration: t.pulseMs, strong: 0, weak: t.weak * (soft ? TEXTURE_SOFT : 1) };
+  let left = t.pulses;
+  window.clearTimeout(textureTimer);
+  const next = (): void => {
+    rumble('tactile', pulse);
+    if (--left > 0) textureTimer = window.setTimeout(next, t.gapMs);
+  };
+  next();
 }
 
 // --- wiring ------------------------------------------------------------------------------------

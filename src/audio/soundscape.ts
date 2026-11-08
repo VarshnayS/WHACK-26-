@@ -23,7 +23,7 @@
  */
 import * as THREE from 'three';
 import type { Agent, World } from '../world';
-import type { ActivePing } from '../shared/contracts';
+import type { ActivePing, TactileKind } from '../shared/contracts';
 import type { StunnedPayload } from '../player/controller';
 import * as C from './soundscapeConfig';
 import type { SfxName } from './soundscapeConfig';
@@ -393,6 +393,11 @@ class Soundscape {
   private entityLimp = 1;
   private readonly chatty = new WeakMap<Agent, boolean>();
   private offStep: (() => void) | null = null;
+  private tactileBuffers: Record<TactileKind, AudioBuffer> | null = null;
+  private tactilePanner: PannerNode | null = null;
+  private scrapePanner: PannerNode | null = null;
+  private scrapeGain: GainNode | null = null;
+  private scrapeOn = false;
 
   private readonly listenerPos = new THREE.Vector3();
   private readonly lastListenerPos = new THREE.Vector3();
@@ -483,6 +488,7 @@ class Soundscape {
     ring.start();
 
     this.buildAmbient(ctx, white, brown);
+    this.buildTactile(ctx, white);
     this.lastPingStart = performance.now() / 1000; // only react to pings fired from now on
     this.lastListenerPos.copy(this.world.camera.position);
     void this.loadFiles(ctx);
@@ -572,6 +578,41 @@ class Soundscape {
     src.connect(g).connect(slot.input);
     src.start(t);
     slot.busyUntil = t + buf.duration / rate;
+  }
+
+  /** Tactile paving: two one-shot textures and the looping guidance scrape (silent until used). */
+  private buildTactile(ctx: AudioContext, white: AudioBuffer): void {
+    this.tactileBuffers = { blister: renderBlisterRattle(ctx), guidance: renderGuidanceScrape(ctx) };
+    this.tactilePanner = makePanner(ctx, 1.5, 1.2);
+    this.tactilePanner.connect(this.spatialBus);
+    this.scrapePanner = makePanner(ctx, 1.5, 1.2);
+    this.scrapePanner.connect(this.spatialBus);
+    const band = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: TACTILE_SCRAPE_HZ, Q: 1.1 });
+    // amplitude ribs, as if dragging across raised bars
+    const ribs = new GainNode(ctx, { gain: 0.55 });
+    lfo(ctx, TACTILE_SCRAPE_RIB_HZ, 0.45, ribs.gain);
+    this.scrapeGain = new GainNode(ctx, { gain: 0 });
+    noiseSource(ctx, white).connect(band).connect(ribs).connect(this.scrapeGain).connect(this.scrapePanner);
+  }
+
+  /** One textured tap on tactile paving, spatialised at `pos`. */
+  playTactile(kind: TactileKind, pos: THREE.Vector3, soft: boolean): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.tactileBuffers || !this.tactilePanner) return;
+    setPannerPos(this.tactilePanner, pos.x, pos.y, pos.z);
+    const src = new AudioBufferSourceNode(ctx, { buffer: this.tactileBuffers[kind], playbackRate: rand(0.94, 1.06) });
+    src.connect(new GainNode(ctx, { gain: soft ? TACTILE_GAIN_SOFT : TACTILE_GAIN })).connect(this.tactilePanner);
+    src.start();
+  }
+
+  /** Turn the continuous guidance scrape on or off; while on, call it each frame to move it with the tip. */
+  setTactileScrape(on: boolean, pos: THREE.Vector3): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.scrapeGain || !this.scrapePanner) return;
+    if (on) setPannerPos(this.scrapePanner, pos.x, pos.y, pos.z);
+    if (on === this.scrapeOn) return;
+    this.scrapeOn = on;
+    this.scrapeGain.gain.setTargetAtTime(on ? TACTILE_SCRAPE_GAIN : 0, ctx.currentTime, 0.06);
   }
 
   // --- per frame ---------------------------------------------------------------------------------
@@ -877,6 +918,59 @@ class Soundscape {
   }
 }
 
+// --- tactile paving sounds ------------------------------------------------------------------------
+
+const TACTILE_GAIN = 0.55;
+const TACTILE_GAIN_SOFT = 0.22;
+const TACTILE_SCRAPE_GAIN = 0.14;
+const TACTILE_SCRAPE_HZ = 1700;
+const TACTILE_SCRAPE_RIB_HZ = 24;
+
+function monoBuffer(ctx: BaseAudioContext, x: Float32Array): AudioBuffer {
+  let peak = 0;
+  for (let i = 0; i < x.length; i++) peak = Math.max(peak, Math.abs(x[i]));
+  const buf = ctx.createBuffer(1, x.length, ctx.sampleRate);
+  const out = buf.getChannelData(0);
+  for (let i = 0; i < x.length; i++) out[i] = peak > 0 ? (x[i] / peak) * 0.85 : 0;
+  return buf;
+}
+
+/** Bumpy rattle: the tip bouncing over domes, a run of short hard ticks. */
+function renderBlisterRattle(ctx: BaseAudioContext): AudioBuffer {
+  const sr = ctx.sampleRate;
+  const x = new Float32Array(Math.floor(0.34 * sr));
+  let at = 0;
+  for (let tick = 0; tick < 7; tick++) {
+    const start = Math.floor(at * sr);
+    const hz = rand(1300, 2400);
+    const level = rand(0.6, 1) * (1 - tick * 0.08);
+    for (let i = start; i < x.length; i++) {
+      const t = (i - start) / sr;
+      const env = Math.exp(-t / 0.006);
+      if (env < 0.001) break;
+      x[i] += level * env * (0.6 * Math.sin(2 * Math.PI * hz * t) + 0.4 * (Math.random() * 2 - 1));
+    }
+    at += rand(0.028, 0.044);
+  }
+  return monoBuffer(ctx, x);
+}
+
+/** Ribbed scrape: filtered noise pulsing as the tip crosses the raised bars. */
+function renderGuidanceScrape(ctx: BaseAudioContext): AudioBuffer {
+  const sr = ctx.sampleRate;
+  const x = new Float32Array(Math.floor(0.36 * sr));
+  let low = 0;
+  for (let i = 0; i < x.length; i++) {
+    const t = i / sr;
+    const n = Math.random() * 2 - 1;
+    low += 0.12 * (n - low);
+    const rib = 0.35 + 0.65 * Math.pow(0.5 + 0.5 * Math.sin(2 * Math.PI * 26 * t), 3);
+    const env = Math.min(1, t / 0.015) * Math.min(1, (0.36 - t) / 0.08);
+    x[i] = (n - low) * rib * env;
+  }
+  return monoBuffer(ctx, x);
+}
+
 let instance: Soundscape | null = null;
 
 /** Install the soundscape (audio starts on the first click / key press). Safe to call twice. */
@@ -889,6 +983,16 @@ export function initSoundscape(world: World): void {
 /** Start the audio engine. Must be called inside a user gesture (the start screen's click). */
 export function startSoundscape(): void {
   instance?.begin();
+}
+
+/** A textured tap on tactile paving at `pos` (src/senses/caneTactile.ts). `soft` = underfoot. */
+export function playTactile(kind: TactileKind, pos: THREE.Vector3, soft: boolean): void {
+  instance?.playTactile(kind, pos, soft);
+}
+
+/** The continuous guidance-line scrape; while on, call each frame so it follows the tip. */
+export function setTactileScrape(on: boolean, pos: THREE.Vector3): void {
+  instance?.setTactileScrape(on, pos);
 }
 
 /** Debug: how many voices are live right now, or null before init. */
