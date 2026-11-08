@@ -7,8 +7,9 @@
  * rise over the rooftops, and it never gets thinner than a few pixels however far away it is.
  *
  * For the first START_PULSE_S of a run it throbs, sends expanding rings out from its base and is drawn
- * through buildings, so the player can see where to go. After that the buildings hide it as normal
- * (the top of the beam still shows above them). Only exists on screen during a run with a goal.
+ * through buildings, so the player can see where to go. It then fades away, and only comes back
+ * while the player is within REVEAL_RADIUS_M of the goal (buildings hide it as normal then).
+ * Only exists on screen during a run with a goal.
  *
  * Green is a deliberate exception to AGENTS.md rule 9, requested by Guneet. Tune with the constants.
  */
@@ -21,6 +22,12 @@ export const GOAL_COLOR = 0x00ff55;
 /** How long the opening pulse lasts (s) and the time between pulses (s). */
 export const START_PULSE_S = 6;
 const PULSE_PERIOD_S = 1.2;
+/** Fade-out at the end of the opening pulse (s). */
+const PULSE_FADE_S = 1;
+/** After the opening pulse, the beacon is visible only within this distance of the player (m). */
+export const REVEAL_RADIUS_M = 20;
+/** It fades in over this many metres, ending at REVEAL_RADIUS_M. */
+const REVEAL_FADE_M = 4;
 /** Beam height (m): above the buildings along the corridor. */
 const BEAM_HEIGHT_M = 45;
 /** Beam radius up close (m), and how fast it widens with distance so it stays visible (m per m). */
@@ -71,15 +78,17 @@ export function initGoalBeacon(): void {
   world.scene.add(root);
 
   let elapsed = 0;
+  let active = false;
 
   onRunChange(() => {
-    root.visible = isRunActive() && getRoute().goal !== null;
+    active = isRunActive() && getRoute().goal !== null;
+    root.visible = active;
     elapsed = 0;
   });
 
   world.onUpdate((dt) => {
     const goal = getRoute().goal;
-    if (!root.visible || !goal) return;
+    if (!active || !goal) return;
     elapsed += dt;
 
     root.position.set(goal.x, sampleGround(goal.x, goal.z), goal.z);
@@ -87,6 +96,12 @@ export function initGoalBeacon(): void {
     const dist = Math.hypot(cam.x - goal.x, cam.z - goal.z);
 
     const pulsing = elapsed < START_PULSE_S;
+    const pulseFade = THREE.MathUtils.clamp((START_PULSE_S - elapsed) / PULSE_FADE_S, 0, 1);
+    const nearFade = THREE.MathUtils.clamp((REVEAL_RADIUS_M - dist) / REVEAL_FADE_M, 0, 1);
+    const fade = Math.max(pulseFade, nearFade);
+    root.visible = fade > 0;
+    if (!root.visible) return;
+
     for (const m of mats) m.depthTest = !pulsing; // through buildings only during the opening pulse
 
     // 0..1 within each pulse: sharp rise, then a decay
@@ -95,17 +110,17 @@ export function initGoalBeacon(): void {
 
     const beamRadius = Math.max(BEAM_RADIUS_M, dist * BEAM_RADIUS_PER_M) * (1 + (PULSE_WIDEN - 1) * throb);
     beam.scale.x = beam.scale.z = beamRadius;
-    beamMat.opacity = pulsing ? BEAM_OPACITY + (1 - BEAM_OPACITY) * throb : BEAM_OPACITY;
+    beamMat.opacity = fade * (pulsing ? BEAM_OPACITY + (1 - BEAM_OPACITY) * throb : BEAM_OPACITY);
 
     gem.scale.setScalar(Math.max(GEM_RADIUS_M, dist * GEM_RADIUS_PER_M) * (1 + 0.5 * throb));
     gem.rotation.y = elapsed * GEM_TURN;
-    gemMat.opacity = 1;
+    gemMat.opacity = fade;
 
-    ringMat.opacity = 0.9;
+    ringMat.opacity = 0.9 * fade;
     pulseRing.visible = pulsing;
     if (pulsing) {
       pulseRing.scale.setScalar(GOAL_RADIUS_M + phase * PULSE_RING_REACH_M);
-      pulseMat.opacity = 1 - phase;
+      pulseMat.opacity = (1 - phase) * fade;
     }
   });
 }
