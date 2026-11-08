@@ -3,7 +3,7 @@
  * Owner: SENSES (HUD)
  *
  *  - a one-line message under the audio message (controller connected, haptics test, vision cycling);
- *  - "Cane: auto-sweep on/off (X)" in the top-right corner, under the vision label.
+ *  - "Cane: auto-sweep on/off (C)" in the top-right corner, under the vision label.
  * White on black, plain HTML over the canvas.
  */
 import { getCaneState, onAutoSweepChange } from '../senses/cane';
@@ -45,7 +45,7 @@ export function initInputHud(hud: HTMLElement): void {
   el.style.cssText = 'position:absolute;right:8px;top:26px;opacity:0.8;font-size:12px;';
   hud.appendChild(el);
   const render = (on: boolean) => {
-    el.textContent = `Cane: auto-sweep ${on ? 'on' : 'off'}  (X)`;
+    el.textContent = `Cane: auto-sweep ${on ? 'on' : 'off'}  (C)`;
   };
   render(getCaneState().auto);
   onAutoSweepChange((on) => {

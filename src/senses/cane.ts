@@ -9,8 +9,10 @@
  * raised to stay just inside the bottom edge; looking down shows it where it really is.
  *
  * SWEEPING
- *  - Manual: hold C, right mouse or controller RT. Constant 100°/s across a 60° arc.
- *  - Auto-sweep (X / controller Y toggles; on by default): the two-point touch technique. The tip
+ *  - Manual: hold right mouse or controller RT (src/player/input.ts). Constant 100°/s across a 60° arc.
+ *  - Auto-sweep (C / controller Y toggles; as before PR #20, C is a toggle): the two-point touch
+ *    technique. Off by default with keyboard and mouse; a controller connecting turns it on (and the
+ *    last one leaving turns it off again) unless the player has toggled it themselves. The tip
  *    swings in rhythm with the footsteps (src/senses/footsteps.ts) and touches down on the opposite
  *    side to the stepping foot (left tap on the right step), lifting slightly mid-arc. Each touch-down
  *    pings and ticks. Standing still, the cane rests in the centre.
@@ -38,6 +40,7 @@ import { EYE_HEIGHT } from '../config';
 import { createSonarMaterial } from '../render/sonarMaterial';
 import { getStepProgress } from './footsteps';
 import { recordAudit } from '../player/auditRecord';
+import { isCaneSweepHeld } from '../player/input';
 import {
   CANE_ARC_DEG,
   CANE_AUTO_LIFT,
@@ -75,6 +78,8 @@ const HALF_ARC = (CANE_ARC_DEG / 2) * DEG;
 const SWEEP_SPEED = CANE_SWEEP_DEG_PER_S * DEG;
 const AUTO_MAX_SPEED = CANE_AUTO_MAX_DEG_PER_S * DEG;
 const REST_SPEED = CANE_REST_DEG_PER_S * DEG;
+/** A tip jump longer than this in one frame is a teleport (run start, placeAt), not a fast swing. */
+const TELEPORT_SQ = 1.5 * 1.5;
 const UP = new THREE.Vector3(0, 1, 0);
 
 const hand = new THREE.Vector3();
@@ -100,7 +105,7 @@ let initialised = false;
 export interface CaneState {
   /** True while the cane is sweeping (manual hold, or auto-sweep while walking). */
   held: boolean;
-  /** Auto-sweep mode on (X / controller Y). */
+  /** Auto-sweep mode on (C / controller Y). */
   auto: boolean;
   /** Sweep angle in radians, + = to the player's left, within ±halfArc. */
   angle: number;
@@ -160,20 +165,27 @@ export function onAutoSweepChange(fn: (on: boolean) => void): () => void {
   return () => autoListeners.delete(fn);
 }
 
+/** True once the player has toggled auto-sweep themselves: controller connects no longer change it. */
+let autoChosen = false;
+
 export function setAutoSweep(on: boolean): void {
   if (on === state.auto) return;
   state.auto = on;
   for (const fn of autoListeners) fn(on);
 }
 
+/** The player's toggle (C / controller Y). */
 export function toggleAutoSweep(): void {
+  autoChosen = true;
   setAutoSweep(!state.auto);
 }
 
-/** Controller RT: hold to sweep (src/player/gamepad.ts). */
-let padHeld = false;
-export function setCanePadHeld(held: boolean): void {
-  padHeld = held;
+/**
+ * Default for the current input: on while a controller is connected, off with keyboard and mouse
+ * (src/player/gamepad.ts calls this). Ignored once the player has toggled it.
+ */
+export function setAutoSweepDefault(on: boolean): void {
+  if (!autoChosen) setAutoSweep(on);
 }
 
 /** Hard tap (B / controller A). Set in initCane. */
@@ -248,8 +260,6 @@ export function initCane(world: World): void {
   if (initialised) return;
   initialised = true;
 
-  let mouseHeld = false;
-  let keyHeld = false;
   let angle = 0; // radians, + = to the player's left
   let sweepDir = 1;
   let lastTap = -Infinity;
@@ -264,28 +274,12 @@ export function initCane(world: World): void {
   const mesh = createCaneMesh();
   world.camera.add(mesh); // the camera is in the scene, so its children render
 
-  // --- input ---
-  window.addEventListener('mousedown', (e) => {
-    if (e.button === 2) mouseHeld = true;
-  });
-  window.addEventListener('mouseup', (e) => {
-    if (e.button === 2) mouseHeld = false;
-  });
-  window.addEventListener('contextmenu', (e) => e.preventDefault());
+  // --- input (held sweep: right mouse / RT, read from src/player/input.ts each frame) ---
   window.addEventListener('keydown', (e) => {
-    if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
     // Shift+C = mic recalibration (src/audio/index.ts), so plain C only
-    if (e.code === 'KeyC' && !e.shiftKey) keyHeld = true;
-    if (e.repeat) return;
-    if (e.code === 'KeyX') toggleAutoSweep();
+    if (e.code === 'KeyC' && !e.shiftKey) toggleAutoSweep();
     if (e.code === 'KeyB') hardTap();
-  });
-  window.addEventListener('keyup', (e) => {
-    if (e.code === 'KeyC') keyHeld = false;
-  });
-  window.addEventListener('blur', () => {
-    mouseHeld = false;
-    keyHeld = false;
   });
 
   function now(): number {
@@ -322,7 +316,7 @@ export function initCane(world: World): void {
 
   world.onUpdate((dtRaw) => {
     const dt = Math.min(dtRaw, 0.05);
-    const manual = mouseHeld || keyHeld || padHeld;
+    const manual = isCaneSweepHeld();
     const step = getStepProgress();
     const autoSweeping = !manual && state.auto && step.moving;
     const sweeping = manual || autoSweeping;
@@ -369,7 +363,8 @@ export function initCane(world: World): void {
     dir.copy(forward).applyAxisAngle(UP, angle);
     tip.set(cam.position.x, feetY + 0.02 + lift, cam.position.z).addScaledVector(dir, CANE_REACH);
     freeTip.copy(tip);
-    if (first) {
+    // teleported (run start / placeAt): don't sweep-cast across the jump or count it as tip speed
+    if (first || freeTip.distanceToSquared(prevFreeTip) > TELEPORT_SQ) {
       prevTip.copy(tip);
       prevFreeTip.copy(tip);
     }

@@ -4,7 +4,7 @@
  *
  * Uses gamepad.vibrationActuator.playEffect('dual-rumble', { duration, strongMagnitude,
  * weakMagnitude }) on the active controller (src/player/gamepad.ts). If the pad or browser can't
- * rumble, that's logged once and everything else carries on.
+ * rumble (no vibrationActuator), it's a silent no-op; one info line is logged when a pad connects.
  *
  * What vibrates (nothing else, for now):
  *  - cane contact / hard tap: a short sharp weak-motor pulse scaled by contact strength
@@ -20,7 +20,7 @@
  */
 import { onCaneContact } from '../senses/cane';
 import { onPlayerImpact, type PlayerImpact } from './controller';
-import { getActivePad, onPadChange } from './gamepad';
+import { getActivePad, onPadChange } from './input';
 import { showInputMessage } from '../hud/inputHud';
 
 /** A dual-rumble effect. Magnitudes 0..1, duration in ms. */
@@ -104,11 +104,7 @@ export function rumble(channel: HapticChannel, r: Rumble): boolean {
   }
   const act = actuatorOf(pad);
   if (!act) {
-    lastResult = 'unsupported';
-    if (!warned.has(pad.id)) {
-      warned.add(pad.id);
-      console.warn(`[haptics] no dual-rumble on "${pad.id}" in this browser; haptics off`);
-    }
+    lastResult = 'unsupported'; // silent no-op (the connect log already said so)
     return false;
   }
   const now = performance.now();
@@ -127,7 +123,7 @@ export function rumble(channel: HapticChannel, r: Rumble): boolean {
       lastResult = 'error';
       if (!warned.has(`${pad.id}:error`)) {
         warned.add(`${pad.id}:error`);
-        console.warn('[haptics] playEffect failed:', err);
+        console.info('[haptics] playEffect failed, carrying on without rumble:', err);
       }
     });
   return true;
@@ -169,7 +165,7 @@ export function initHaptics(): void {
     if (!pad || warned.has(pad.id)) return;
     warned.add(pad.id);
     if (actuatorOf(pad)) console.info(`[haptics] dual-rumble available on "${pad.id}"`);
-    else console.warn(`[haptics] no dual-rumble on "${pad.id}" in this browser; haptics off`);
+    else console.info(`[haptics] no dual-rumble on "${pad.id}" in this browser: haptics off`);
   });
   onCaneContact((c) => rumble('cane', caneRumble(c.strength)));
   onPlayerImpact((i: PlayerImpact) => rumble('impact', impactRumble(i.level, i.forced)));

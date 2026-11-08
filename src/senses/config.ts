@@ -27,10 +27,11 @@ export const IDLE_PULSE_RANGE = 1.5;
 // --- cane (src/senses/cane.ts) -------------------------------------------------------------------
 
 /**
- * The cane is always out and visible. Hold C / right mouse / RT = manual sweep. X / controller Y
- * toggles auto-sweep (two-point touch synced to the footsteps); this is its starting state.
+ * The cane is always out and visible. Hold right mouse / RT = manual sweep. C / controller Y toggles
+ * auto-sweep (two-point touch synced to the footsteps). This is its starting state with keyboard and
+ * mouse; a controller connecting switches it on (src/senses/cane.ts setAutoSweepDefault).
  */
-export const CANE_AUTO_SWEEP = true;
+export const CANE_AUTO_SWEEP = false;
 /** Horizontal reach of the cane tip in front of the feet (m). */
 export const CANE_REACH = 1.2;
 /** Full sweep arc (degrees), centred on where the player faces. */
@@ -71,7 +72,7 @@ export const CANE_MAX_OBSTACLE_NORMAL_Y = 0.7;
  */
 export const CANE_SWEEP_PING_RANGE = 4.5;
 export const CANE_SWEEP_PING_DEG = 15;
-/** Ping range (m) of a contact tap / a hard tap (B). These also play the tap sound. */
+/** Ping range (m) of a contact tap / a hard tap (B / controller A). These also play the tap sound. */
 export const CANE_TAP_RANGE = 1.5;
 export const CANE_HARD_TAP_RANGE = 6;
 /** Minimum time between two contact taps (s), so resting on a wall doesn't machine-gun pings. */
