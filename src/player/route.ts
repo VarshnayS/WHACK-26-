@@ -91,6 +91,11 @@ function changed(): void {
 
 load();
 
+/** True from begin until the goal is reached (also true for a run with no goal). */
+export function isRunActive(): boolean {
+  return runStartedAt >= 0 && !goalDone;
+}
+
 /** Current route (read-only view; change it with the setters). */
 export function getRoute(): Readonly<Route> {
   return route;
