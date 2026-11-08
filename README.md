@@ -70,19 +70,18 @@ Check the proxy works by opening http://localhost:8787/v1/3dtiles/root.json. You
 
 ### Controls
 
-A controller works too (Gamepad API, tested in Chrome): plug it in and press any button. The mapping lives in one table, `src/player/gamepadConfig.ts`. A button sends the same key event as its key, so it does exactly the same thing. **LT+** means hold LT (the controller's Shift layer).
+Keyboard and mouse work exactly as before the controller support (PR #20 changed W/A/S/D's top speed and the C/V cane keys; fix/input-keyboard-controller put them back). A controller works too, at the same time as the keyboard: plug it in and press any button. The two are **added together** (`src/player/input.ts`): keys + left stick for movement, mouse + right stick for look. An idle controller contributes nothing and never overrides the keyboard, and with no controller connected the controller code does no work at all. The mapping lives in one table, `src/player/gamepadConfig.ts`. A button sends the same key event as its key, so it does exactly the same thing. **LT+** means hold LT (the controller's Shift layer).
 
 | Key | Controller | Action |
 |---|---|---|
 | Click to begin | (click once) | On the start screen: starts the audio engine and the mic (browser permission prompt, then ~1.5 s calibration: stay quiet) and locks the mouse |
 | Mouse | Right stick | Look around (click the scene to re-lock after Esc) |
-| WASD | Left stick | Walk (speed builds up the longer you hold a key; the stick's push sets the top speed) |
-| Hold Shift | L3 (toggle) | Run (up to 5.5 m/s instead of 1.8). L3 turns off when you let go of the stick |
+| WASD | Left stick | Walk: momentum builds up the longer you hold a key, to 5.5 m/s after ~1.8 s (no Shift needed). The stick uses the same momentum; how far you push it sets the top speed |
 | Speak / clap / shout | | Voice sonar: a whisper reveals ~2 m, a shout ~20 m |
 | Space | B | Medium voice ping (works with no mic) |
 | Shift+Space | X | Max-strength voice ping |
-| Hold C or right mouse | Hold RT | Sweep the white cane by hand |
-| X | Y | Auto-sweep on / off (on by default): two-point touch in rhythm with your steps |
+| Hold right mouse | Hold RT | Sweep the white cane by hand |
+| C | Y | Cane auto-sweep on / off: two-point touch in rhythm with your steps. Off by default with keyboard and mouse, switched on when a controller connects (until you toggle it yourself) |
 | B | A | Hard cane tap: a bigger 6 m ping |
 | H | LT+X | Haptics test: each press plays the next level (cane tap, light knock, mid stun, full stun, car hit) and shows its values |
 | V | View | Architect hotspot map (AUDIT) |
@@ -101,9 +100,17 @@ A controller works too (Gamepad API, tested in Chrome): plug it in and press any
 | F | LT+R3 | Debug: free-fly camera (E/Q up/down, Shift fast, G back to eye height) |
 | T / N | LT+Y / LT+A | Debug: entity overlay / entity test ping |
 | P / Shift+P | LT+D-pad → / LT+L3 | Dev builds only: fake ping of the next type / one of each type ahead |
-| Esc | | Release the mouse (the controller doesn't need it) |
+| Esc | | Release the mouse and pause (the controller doesn't need the mouse) |
 
-Haptics (controllers with `vibrationActuator` dual-rumble): cane taps give a short weak-motor pulse scaled by how fast the tip hit. Bumps and stuns use the controller's stun intensity (0.25 knock up to 1.0 full stun) for strength (0.3–1) and length (120–800 ms). A car hit is always full on both motors. Nothing else vibrates.
+Free keys (unused, safe for new features): X, I, K, L, Y, Z, 1–9. Shift is only a modifier (Shift+Space, Shift+C, Shift+M, Shift+P); it does nothing to movement.
+
+Haptics (only on controllers whose browser exposes `vibrationActuator` dual-rumble; otherwise a silent no-op): cane taps give a short weak-motor pulse scaled by how fast the tip hit. Bumps and stuns use the controller's stun intensity (0.25 knock up to 1.0 full stun) for strength (0.3–1) and length (120–800 ms). A car hit is always full on both motors. Nothing else vibrates.
+
+**Controllers and browsers.** Tested in Chrome (macOS) with a headless fake controller (below); play-test Chrome and Edge on macOS and Windows with your own pad before a demo. Any pad the browser reports with `mapping === 'standard'` (Xbox, DualShock / DualSense, Switch Pro, most GuliKit / 8BitDo modes in Chrome and Edge) uses the standard layout. Anything else goes through a fallback table (`PAD_LAYOUTS` in `src/player/gamepadConfig.ts`: Xbox / XInput, PlayStation, Switch-style, generic) and logs `[gamepad] "…" reports mapping "…": using the "…" fallback layout` once. Several pads: the one you last touched drives the game. Hot-plugging works mid-game: unplugging hands over to the keyboard with nothing held down. **Safari and Firefox only partly support the Gamepad API**: pads often come through as non-standard (fallback layout, untested on hardware), and rumble is usually missing (Firefox) or limited (Safari), so haptics just stay off there.
+
+**Testing without a controller (dev builds only).**
+- `http://localhost:5173/?fakepad=1` adds a virtual standard controller (`src/player/dev/fakePad.ts`; `?fakepad=unplugged` starts it unplugged). A panel in the bottom left has sliders for both sticks and triggers (they spring back to 0 when released; tick "hold" to keep them), buttons for every control (tick "latch" to make clicks toggle), a plug-in box, and a log of every rumble the game sends (time, ms, strong, weak). With `?fakepad`, Esc frees the mouse **without** pausing so you can use the panel; click the scene to go back to keyboard and mouse. Production builds don't contain any of it.
+- `node src/player/dev/inputCheck.mjs` (with `npm run dev:all` running) drives the real game in headless Chrome or Edge (`CHROME_PATH` to pick one) and checks: keyboard only (pre-#20 speeds and directions, mouse look, no Gamepad API calls), fake pad only, both at once, unplugging mid-game, the cane from both, two pads plus a non-standard layout, and the rumble strengths for cane contacts, a light knock, a full stun and a car hit. It exits non-zero if anything fails.
 
 ## Map data
 
@@ -180,7 +187,9 @@ src/
   world/debug*.ts          R reveal-all key, F free-fly camera, debug readout
   player/controller.ts     first-person movement, stuns (world 'stunned' event)
   player/collision.ts      raycast wall + ground collision against world.tilesGroup
-  player/gamepad*.ts       controller input (Gamepad API) + the one mapping table
+  player/input.ts          the one input state: keyboard/mouse + controller, added together
+  player/gamepad*.ts       controller input (Gamepad API) + the one mapping table + fallback layouts
+  player/dev/              dev-only fake controller (?fakepad=1) and the headless input check
   player/haptics.ts        controller rumble scaled by impact (cane taps, bumps, stuns, cars)
   senses/footsteps.ts      the player's footstep pings
   senses/cane.ts           white cane (visible, manual + two-point-touch auto-sweep, contact taps)
@@ -321,7 +330,7 @@ While the start screen is up the ground grid builds in loading mode (24 ms per f
 
 ## White cane
 
-The cane is always out, drawn in first person as a thin tube (shared sonar material, lit along its length) from the lower-right of the view to its tip on the ground 1.2 m ahead. Its tip is drawn raised just inside the bottom of the view, so you see it without looking down. **Auto-sweep** (X / controller Y, on by default) uses the two-point touch technique: the tip touches down left, then right, in rhythm with your footsteps (left tap on the right step), across a 60° arc. It ticks and pings on each touch-down, and rests in the centre when you stand still. Hold C, right mouse or RT to sweep by hand instead. Contacts with walls, curbs or posts give a 1.5 m `cane` ping, a tap sound, an audit record and a haptic pulse scaled by tip speed. B (controller A) gives a hard 6 m tap. Tuning: `src/senses/config.ts`.
+The cane is always out, drawn in first person as a thin tube (shared sonar material, lit along its length) from the lower-right of the view to its tip on the ground 1.2 m ahead. Its tip is drawn raised just inside the bottom of the view, so you see it without looking down. **Auto-sweep** (C / controller Y; off by default with keyboard and mouse, on when a controller connects) uses the two-point touch technique: the tip touches down left, then right, in rhythm with your footsteps (left tap on the right step), across a 60° arc. It ticks and pings on each touch-down, and rests in the centre when you stand still. Hold right mouse or RT to sweep by hand instead. Contacts with walls, curbs or posts give a 1.5 m `cane` ping, a tap sound, an audit record and a haptic pulse scaled by tip speed. B (controller A) gives a hard 6 m tap. Tuning: `src/senses/config.ts`.
 
 ## Attribution (must stay visible)
 
