@@ -32,7 +32,7 @@ import { settings, setEntityEnabledSetting } from '../game/settings';
 import { PAD_BINDINGS, PAD_HELD, type PadButton } from '../player/gamepadConfig';
 import { getActivePad } from '../player/input';
 import { createRoutePicker, initGoalMessage } from './routePicker';
-import { applyRouteStart } from '../player/route';
+import { applyRouteStart, endRun } from '../player/route';
 
 /** Everything must stay ready this long before "Click to begin" lights up (ms): tiles can restart loading. */
 const READY_HOLD_MS = 400;
@@ -290,6 +290,7 @@ export function initStartScreen(hud: HTMLElement): void {
     el.style.display = 'flex';
     setBegin(true, 'Click to begin');
     getPlayerController()?.controls.unlock();
+    endRun(); // before the capture, so the goal beacon isn't drawn into the map
     route.capture(); // redraw the map and the saved start / goal markers (the street is already loaded)
   };
 
