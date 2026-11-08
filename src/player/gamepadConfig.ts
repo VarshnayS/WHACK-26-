@@ -71,6 +71,7 @@ export const PAD_BINDINGS: readonly PadBinding[] = [
   { button: 'DOWN', layer: 'base', action: key('Comma'), keys: ',', label: 'Sound volume down' },
   { button: 'LEFT', layer: 'base', action: key('KeyU'), keys: 'U', label: 'Mute / unmute sound' },
   { button: 'RIGHT', layer: 'base', action: key('KeyC', true), keys: 'Shift+C', label: 'Recalibrate the mic' },
+  { button: 'L3', layer: 'base', action: key('KeyK'), keys: 'K', label: 'Tactile paving on / off' },
   { button: 'R3', layer: 'base', action: key('KeyR'), keys: 'R', label: 'Debug: reveal all' },
   // --- LT layer (hold LT) ---
   { button: 'LEFT', layer: 'lt', action: key('KeyM', true), keys: 'Shift+M', label: 'Mute / unmute the mic' },
