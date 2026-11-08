@@ -6,6 +6,7 @@ import type { World } from '../world';
 import { initVision } from './vision';
 import { initFootsteps } from './footsteps';
 import { initCane } from './cane';
+import { initCaneTactile } from './caneTactile';
 import { initGamepad } from '../player/gamepad';
 import { initHaptics } from '../player/haptics';
 
@@ -13,6 +14,7 @@ export function initSenses(world: World): void {
   initVision(world);
   initFootsteps(world);
   initCane(world);
+  initCaneTactile(world); // after initCane: reads this frame's tip
   initGamepad();
   initHaptics();
   // Dev builds only: ?fakepad=1 (or ?fakepad=unplugged) adds a virtual controller with an on-screen

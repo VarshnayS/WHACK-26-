@@ -137,6 +137,11 @@ const state: CaneState = {
   touchSerial: 0,
 };
 
+/** Where the cane tip is this frame (world space). Reused every frame: read it, don't keep it. */
+export function getCaneTip(): Readonly<THREE.Vector3> {
+  return tip;
+}
+
 export function getCaneState(): Readonly<CaneState> {
   return state;
 }
