@@ -15,6 +15,8 @@ Several coding agents (Claude Code sessions run by different teammates on their 
 | **RENDER** | Suleman | `feat/sonar-render` | everything in `src/render/`, `src/senses/vision.ts`, `src/senses/visionPicker.ts`, `src/senses/visionConfig.ts` |
 | **SENSES** | Guneet | `feat/mic-hud-audio` | everything in `src/player/`, `src/audio/`, `src/hud/`, plus `src/senses/index.ts`, `src/senses/footsteps.ts`, `src/senses/cane.ts`, `src/senses/config.ts` |
 | **ENTITY** | Ayo | `feat/entity` (or Ayo's existing branch) | everything in `src/entity/` |
+| **TACTILE-WORLD** | TBD | `feat/tactile-world` | `src/world/tactile*.ts`, plus the start screen toggle for the tactile feature |
+| **TACTILE-SENSE** | TBD | `feat/tactile-sense` | `src/senses/caneTactile.ts` |
 
 Varshnay also owns the shared world files (`src/world/index.ts`, `src/main.ts`, `src/config.ts`, `src/shared/contracts.ts`). Changes to those go to him as a `REQUEST`.
 
@@ -34,7 +36,7 @@ If one person runs two agents at once (e.g. SOUND and AUDIT), each must run in i
 6. **No history rewriting.** No force-push, no `reset --hard` on shared branches, no rebasing someone else's branch.
 7. **Don't merge PRs.** Open your PR; a human merges it.
 8. **Secrets.** Never print, log, commit or paste the API key or `.env` contents, including in coordination messages. Don't open `.env` in a way that shares it as context.
-9. **Rendering style.** White lines on black; red is allowed only for stuns and danger. No other colour and no textures anywhere.
+9. **Rendering style.** White lines on black; red only for danger and stuns; yellow only for accessibility features. No other colour and no textures anywhere.
 10. **Performance.** Keep 60 fps at eye height in the corridor on a real GPU. Report FPS in your PR.
 11. **Tier discipline.** Only do the tier and sections you were given. Open a PR as soon as they work. Don't start extras.
 

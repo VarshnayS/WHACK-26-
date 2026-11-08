@@ -11,7 +11,7 @@ import type { Vector3 } from 'three';
 // --- sonar pings ---------------------------------------------------------------------------------
 
 /** What made a ping. The sonar look (speed, thickness, colour) can differ per type. */
-export type PingType = 'voice' | 'footstep' | 'cane' | 'car' | 'pedestrian' | 'impact';
+export type PingType = 'voice' | 'footstep' | 'cane' | 'car' | 'pedestrian' | 'impact' | 'tactile';
 
 /** How a ping is drawn. */
 export interface PingStyle {
@@ -82,10 +82,40 @@ export interface EntityState {
   velocity: Vector3;
 }
 
+// --- tactile paving ------------------------------------------------------------------------------
+
+/** Blister = crossing / hazard warning (dome studs); guidance = directional strip (raised bars). */
+export type TactileKind = 'blister' | 'guidance';
+
+/** One rectangular patch of tactile paving on the ground. */
+export interface TactileStrip {
+  id: string;
+  kind: TactileKind;
+  /** Centre of the patch on the ground, world space (metres). */
+  center: Vector3;
+  /** Rotation about +Y in radians; 0 = `depth` runs along +Z. */
+  yaw: number;
+  /** Size across the walking direction (m). */
+  width: number;
+  /** Size along the walking direction (m). */
+  depth: number;
+}
+
+// --- features ------------------------------------------------------------------------------------
+
+/** Optional features that can be switched on and off (world.features / world.setFeature). */
+export type FeatureName = 'tactile';
+
+/** Payload of the 'featureChanged' event. */
+export interface FeatureChangedPayload {
+  name: FeatureName;
+  on: boolean;
+}
+
 // --- events --------------------------------------------------------------------------------------
 
 /** Names accepted by world.on / world.off / world.emit. */
-export type WorldEventName = 'caught' | 'entityState' | 'stunned';
+export type WorldEventName = 'caught' | 'entityState' | 'stunned' | 'featureChanged';
 
 /** Event callback. The payload shape is up to the module that emits the event. */
 export type WorldEventCallback = (payload?: unknown) => void;
