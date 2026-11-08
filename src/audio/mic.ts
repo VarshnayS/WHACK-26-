@@ -65,8 +65,8 @@ export class MicInput {
       // AGC/NS/EC off, otherwise the browser normalises loudness and the dB readings mean nothing.
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
+          echoCancellation: true,
+          noiseSuppression: true,
           autoGainControl: false,
           channelCount: 1,
         },
