@@ -33,6 +33,8 @@ import { PAD_BINDINGS, PAD_HELD, type PadButton } from '../player/gamepadConfig'
 import { getActivePad } from '../player/input';
 import { createRoutePicker, initGoalMessage } from './routePicker';
 import { applyRouteStart, endRun } from '../player/route';
+import { initTactile } from '../world/tactile';
+import type { FeatureChangedPayload } from '../shared/contracts';
 
 /** Everything must stay ready this long before "Click to begin" lights up (ms): tiles can restart loading. */
 const READY_HOLD_MS = 400;
@@ -195,12 +197,15 @@ export function initStartScreen(hud: HTMLElement): void {
   entityText.textContent = 'Enable Entity (Hard Mode)';
   settingsRow.append(entityBox, entityText);
 
+  const access = createAccessibilitySection();
+
+
   const begin = document.createElement('button');
   begin.type = 'button';
   begin.style.cssText =
     'font:inherit;font-size:16px;padding:10px 28px;background:#000;color:#fff;border:1px solid #fff;border-radius:4px;';
 
-  el.append(title, sub, controls, padPanel.el, barWrap, status, settingsRow, pickers, begin);
+  el.append(title, sub, controls, padPanel.el, barWrap, status, settingsRow, access, pickers, begin);
   hud.appendChild(el);
   mode = 'start';
 
@@ -256,7 +261,13 @@ export function initStartScreen(hud: HTMLElement): void {
   });
   // a click anywhere on the screen (not on the pickers) also begins / resumes
   el.addEventListener('click', (e) => {
-    if (picker.el.contains(e.target as Node) || settingsRow.contains(e.target as Node) || route.el.contains(e.target as Node)) return;
+    if (
+      picker.el.contains(e.target as Node) ||
+      settingsRow.contains(e.target as Node) ||
+      access.contains(e.target as Node) ||
+      route.el.contains(e.target as Node)
+    )
+      return;
     onBegin();
   });
 
@@ -269,6 +280,7 @@ export function initStartScreen(hud: HTMLElement): void {
     status.style.display = 'none';
     controls.style.display = 'none';
     settingsRow.style.display = 'none';
+    access.style.display = 'none';
     el.style.background = 'rgba(0,0,0,0.82)';
     setBegin(true, 'Resume');
     el.style.display = 'flex';
@@ -283,6 +295,7 @@ export function initStartScreen(hud: HTMLElement): void {
     status.style.display = 'none';
     controls.style.display = '';
     settingsRow.style.display = 'flex';
+    access.style.display = 'flex';
     entityBox.checked = settings.entityEnabled;
     // onBegin hides the route picker ("only chosen before the run"): bring it back for the next run
     route.el.style.display = '';
@@ -342,6 +355,43 @@ export function initStartScreen(hud: HTMLElement): void {
           : `Measuring the ground… ${Math.round(ground.progress * 100)}%`;
     if (now / 1000 > BEGIN_ANYWAY_S) setBegin(true, 'Click to begin (still loading)');
   });
+}
+
+/**
+ * TACTILE-WORLD: "Accessibility features" section with the tactile paving toggle (default off =
+ * baseline). It calls world.setFeature('tactile', on) and follows 'featureChanged' (K mid-run).
+ * Also starts src/world/tactile.ts, which places and draws the paving.
+ */
+function createAccessibilitySection(): HTMLElement {
+  initTactile(world);
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:6px;';
+  const head = document.createElement('div');
+  head.textContent = 'Accessibility features';
+  head.style.cssText = 'font-size:12px;opacity:0.7;letter-spacing:0.05em;text-transform:uppercase;';
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.style.cssText =
+    'font:inherit;font-size:14px;padding:6px 14px;background:#000;border-radius:4px;cursor:pointer;';
+  const show = (on: boolean): void => {
+    toggle.textContent = `Tactile paving: ${on ? 'on' : 'off'}  (K)`;
+    toggle.setAttribute('aria-pressed', String(on));
+    // yellow is reserved for accessibility features (AGENTS.md rule 9)
+    toggle.style.color = on ? '#ffd400' : '#fff';
+    toggle.style.border = `1px solid ${on ? '#ffd400' : 'rgba(255,255,255,0.6)'}`;
+  };
+  show(world.features.tactile);
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    world.setFeature('tactile', !world.features.tactile);
+    toggle.blur(); // so Space/Enter in game don't press it again
+  });
+  world.on('featureChanged', (payload) => {
+    const p = payload as FeatureChangedPayload | undefined;
+    if (p?.name === 'tactile') show(p.on);
+  });
+  wrap.append(head, toggle);
+  return wrap;
 }
 
 /** True while the start screen or the vision overlay is open. */
