@@ -96,13 +96,14 @@ Keyboard and mouse work exactly as before the controller support (PR #20 changed
 | - / = | LT+LB / LT+RB | Mic trigger level down / up (dB above room noise; saved per browser) |
 | 0 | LT+B | Reset mic tuning to the defaults |
 | ` (backtick) | LT+Menu | Audio debug meter |
+| K | L3 | Tactile paving on / off (also on the start screen) |
 | R | R3 | Debug: reveal everything (full grid on the real material; pings and red still draw on top) |
 | F | LT+R3 | Debug: free-fly camera (E/Q up/down, Shift fast, G back to eye height) |
 | T / N | LT+Y / LT+A | Debug: entity overlay / entity test ping |
 | P / Shift+P | LT+D-pad → / LT+L3 | Dev builds only: fake ping of the next type / one of each type ahead |
 | Esc | | Release the mouse and pause (the controller doesn't need the mouse) |
 
-Free keys (unused, safe for new features): X, I, K, L, Y, Z, 1–9. Shift is only a modifier (Shift+Space, Shift+C, Shift+M, Shift+P); it does nothing to movement.
+Free keys (unused, safe for new features): X, I, L, Y, Z, 1–9. Shift is only a modifier (Shift+Space, Shift+C, Shift+M, Shift+P); it does nothing to movement.
 
 Haptics (only on controllers whose browser exposes `vibrationActuator` dual-rumble; otherwise a silent no-op): cane taps give a short weak-motor pulse scaled by how fast the tip hit. Bumps and stuns use the controller's stun intensity (0.25 knock up to 1.0 full stun) for strength (0.3–1) and length (120–800 ms). A car hit is always full on both motors. Nothing else vibrates.
 
