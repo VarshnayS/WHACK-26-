@@ -17,7 +17,7 @@
  *  - RT: hold to sweep the cane. LT: hold for the second layer.
  *  - Everything else comes from PAD_BINDINGS. A 'key' binding sends the same keydown on press and
  *    keyup on release to window, so a button does exactly what its key does.
- *  - Connecting a controller turns cane auto-sweep on (and the last one leaving turns it back off)
+ *  - Connecting a controller turns cane auto-sweep on (and the last one leaving puts it back to its default, CANE_AUTO_SWEEP)
  *    unless the player has toggled it themselves.
  *
  * Sticks are ignored while the start screen / vision overlay is open or the free-fly camera is on.
@@ -25,6 +25,7 @@
 import * as THREE from 'three';
 import { world } from '../world';
 import { setAutoSweepDefault } from '../senses/cane';
+import { CANE_AUTO_SWEEP } from '../senses/config';
 import { VISION_PRESETS } from '../senses/visionConfig';
 import { isOverlayOpen } from '../hud/startScreen';
 import { isDebugCameraActive } from '../world/debugCamera';
@@ -211,7 +212,7 @@ function setActive(pad: Gamepad | null): void {
     if (wasNone) setAutoSweepDefault(true);
   } else {
     showInputMessage('Controller disconnected: keyboard and mouse', 2500);
-    setAutoSweepDefault(false);
+    setAutoSweepDefault(CANE_AUTO_SWEEP); // back to the default, not forced off
   }
 }
 
