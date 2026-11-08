@@ -3,8 +3,7 @@
  * Owner: ENTITY (Ayo). Called once from src/main.ts as initEntity(world).
  *
  * Uses only the shared world object plus read-only world helpers:
- *   - hears pings from world.activePings() (falls back to world.pings, typed 'voice', until the
- *     SOUND branch fills activePings in); ignores the pings it fires itself
+ *   - hears pings from world.activePings(); ignores the pings it fires itself
  *   - patrols the footway graph (getPathGraph, src/world/osm.ts), stays inside the corridor
  *     (clampToPlayArea, src/world/playArea.ts), stands on sampleGround (src/world/heightField.ts)
  *
@@ -22,12 +21,15 @@ import type { World } from '../world';
 import type { EntityState, PingType } from '../shared/contracts';
 import { getPathGraph } from '../world/osm';
 import { clampToPlayArea } from '../world/playArea';
+// NOTE: reads SENSES' route (start/goal) directly. AGENTS.md rule 2 says code against the contract
+// only; this is a deliberate, read-only exception (approved by Ayo) until the route is on `world`.
+import { getRoute, onRouteChange } from '../player/route';
 import { sampleGround } from '../world/heightField';
 import { EntityBrain, type Sound } from './brain';
 import { createEntityBody } from './body';
 import { initEntityDebug } from './debug';
 import { initEntityAudio, setEntityVolume } from './audio';
-import { AUDIO_ENABLED, FOOTSTEP_PING_EVERY, FOOTSTEP_PING_RANGE } from './config';
+import { AUDIO_ENABLED, FOOTSTEP_PING_EVERY, FOOTSTEP_PING_RANGE, SPAWN_GOAL_MIN_DIST, SPAWN_MIN_DIST } from './config';
 
 /** A ping as the entity sees it, whichever list it came from. */
 interface HeardPing {
@@ -60,12 +62,17 @@ function isOwn(p: HeardPing): boolean {
   return ownPings.some((o) => Math.abs(o.time - p.start) < 0.25 && o.origin.distanceToSquared(p.origin) < 0.01);
 }
 
-/** Pings currently travelling, from the contract (or the untyped legacy list until SOUND lands). */
+/** Don't spawn near the run's start point (where the player will appear) or its goal. */
+function routeZones(): { position: THREE.Vector3; radius: number }[] {
+  const { start, goal } = getRoute();
+  const zones = [{ position: new THREE.Vector3(start.x, 0, start.z), radius: SPAWN_MIN_DIST }];
+  if (goal) zones.push({ position: new THREE.Vector3(goal.x, 0, goal.z), radius: SPAWN_GOAL_MIN_DIST });
+  return zones;
+}
+
+/** Pings currently travelling, from the contract. */
 function readPings(world: World): HeardPing[] {
-  const active = world.activePings();
-  if (active.length > 0) return active;
-  const legacy = (world as Partial<Pick<World, 'pings'>>).pings ?? [];
-  return legacy.map((p) => ({ origin: p.origin, range: p.range, start: p.start, type: 'voice' as PingType }));
+  return world.activePings();
 }
 
 export function initEntity(world: World): void {
@@ -73,8 +80,13 @@ export function initEntity(world: World): void {
     graph: () => getPathGraph('footway'),
     ground: sampleGround,
     clamp: (p, inset) => clampToPlayArea(p, inset, new THREE.Vector3()),
+    avoid: routeZones,
   });
   brain = b;
+  // Picking a new start/goal on the start screen: re-spawn so it respects them.
+  onRouteChange(() => {
+    if (!b.engaged) b.spawn(world.camera.position);
+  });
 
   const body = createEntityBody();
   world.scene.add(body.root);
