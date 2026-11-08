@@ -10,6 +10,11 @@ import type { PingType } from '../shared/contracts';
  * (preferably no further than SPAWN_MAX_DIST). The corridor is 200 x 80 m. */
 export const SPAWN_MIN_DIST = 50;
 export const SPAWN_MAX_DIST = 90;
+/** It never spawns within this distance of the run's goal point (route picker on the start screen). */
+export const SPAWN_GOAL_MIN_DIST = 40;
+/** A player jump bigger than this in one frame is a teleport (e.g. "begin" moving you to the start
+ * point): it re-spawns away from the new position and waits for the player again. */
+export const TELEPORT_DIST = 5;
 
 // --- movement --------------------------------------------------------------------------------------
 

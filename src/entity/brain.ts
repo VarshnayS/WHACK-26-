@@ -43,6 +43,8 @@ export interface BrainEnv {
   /** Nearest point inside the corridor, kept `inset` metres off the walls. */
   clamp: (p: THREE.Vector3, inset: number) => THREE.Vector3;
   random?: () => number;
+  /** Extra places it must not spawn near (e.g. the run's start and goal points). */
+  avoid?: () => { position: THREE.Vector3; radius: number }[];
 }
 
 export type BrainEvent =
@@ -225,19 +227,25 @@ export class EntityBrain {
   // ---------------------------------------------------------------------------------------------
 
   /**
-   * A random spawn point inside the play area, never closer than `minDist` to the player:
+   * A random spawn point inside the play area, never closer than `minDist` to the player and
+   * outside every env.avoid() zone (start/goal):
    *  1. a random footway node inside the play area between minDist and maxDist
-   *  2. else any footway node inside the play area at least minDist away
-   *  3. else a random point inside the play area at least minDist away
-   *  4. else the furthest of those tries (the play area may be too small for minDist)
+   *  2. else any footway node inside the play area that satisfies the distances
+   *  3. else a random point inside the play area that satisfies them
+   *  4. else the best of those tries (the play area may be too small for every rule)
    */
   private pickSpawn(playerPos: THREE.Vector3, minDist: number, maxDist: number): THREE.Vector3 {
     const inside = (p: THREE.Vector3) => distXZ(this.env.clamp(p.clone(), C.WALL_INSET), p) < 0.01;
     const pick = <T>(list: T[]): T => list[Math.floor(this.random() * list.length)];
+    const zones = [{ position: playerPos, radius: minDist }, ...(this.env.avoid?.() ?? [])];
+    /** >= 1 when p is outside every zone; otherwise how close it comes (for the last-resort pick). */
+    const score = (p: THREE.Vector3) =>
+      Math.min(...zones.map((z) => (z.radius > 0 ? distXZ(p, z.position) / z.radius : Infinity)));
+    const farEnough = (p: THREE.Vector3) => score(p) >= 1;
 
     const graph = this.env.graph();
     if (graph && graph.positions.length > 0) {
-      const ok = graph.positions.filter((p) => inside(p) && distXZ(p, playerPos) >= minDist);
+      const ok = graph.positions.filter((p) => inside(p) && farEnough(p));
       const inRing = ok.filter((p) => distXZ(p, playerPos) <= maxDist);
       if (inRing.length > 0) return pick(inRing).clone();
       if (ok.length > 0) return pick(ok).clone();
@@ -249,10 +257,10 @@ export class EntityBrain {
       const a = this.random() * Math.PI * 2;
       const r = minDist + this.random() * (maxDist - minDist);
       const p = this.env.clamp(new THREE.Vector3(playerPos.x + Math.sin(a) * r, 0, playerPos.z + Math.cos(a) * r), C.WALL_INSET);
-      const d = distXZ(p, playerPos);
-      if (d >= minDist) return p;
-      if (d > bestD) {
-        bestD = d;
+      const sc = score(p);
+      if (sc >= 1) return p;
+      if (sc > bestD) {
+        bestD = sc;
         best = p;
       }
     }
@@ -261,6 +269,12 @@ export class EntityBrain {
 
   /** Smoothed player velocity from frame-to-frame movement (teleports ignored). */
   private trackPlayer(dt: number, playerPos: THREE.Vector3): void {
+    // Teleported (new run / start point): start over away from the new position.
+    if (C.OMNISCIENT && this.lastPlayerPos && distXZ(playerPos, this.lastPlayerPos) > C.TELEPORT_DIST) {
+      this.spawn(playerPos);
+      this.lastPlayerPos = playerPos.clone();
+      return;
+    }
     if (this.lastPlayerPos && dt > 0) {
       const vx = (playerPos.x - this.lastPlayerPos.x) / dt;
       const vz = (playerPos.z - this.lastPlayerPos.z) / dt;

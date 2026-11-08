@@ -84,7 +84,7 @@ export function initEntityDebug(world: World, brain: EntityBrain): (dt: number) 
     labelTimer = 0.15;
     const silence = Number.isFinite(brain.timeSinceSound) ? `${brain.timeSinceSound.toFixed(1)} s` : 'never';
     label.textContent =
-      `ENTITY  ${brain.state.toUpperCase()}   ${brain.speed.toFixed(1)} m/s\n` +
+      `ENTITY  ${brain.state.toUpperCase()}${brain.engaged ? '' : ' (waiting for player to move)'}   ${brain.speed.toFixed(1)} m/s\n` +
       `to player ${distXZ(brain.position, world.camera.position).toFixed(1)} m   last sound ${silence} ago\n` +
       `target ${brain.target ? `${distXZ(brain.position, brain.target).toFixed(1)} m away` : 'none'}   ` +
       `waypoints ${brain.getWaypoints().length}\n` +
