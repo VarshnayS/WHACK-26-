@@ -9,6 +9,7 @@
 
 import { initStunVignette } from './stunVignette';
 import { initStartScreen } from './startScreen';
+import { initGoalPointer } from './goalPointer';
 import { initInputHud } from './inputHud';
 import { world } from '../world';
 
@@ -21,6 +22,7 @@ export function initHud(): void {
 
   initStunVignette(root);
   initStartScreen(root);
+  initGoalPointer(root);
   initVisionLabel(root);
   initInputHud(root);
 
