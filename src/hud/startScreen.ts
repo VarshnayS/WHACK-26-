@@ -284,10 +284,13 @@ export function initStartScreen(hud: HTMLElement): void {
     controls.style.display = '';
     settingsRow.style.display = 'flex';
     entityBox.checked = settings.entityEnabled;
+    // onBegin hides the route picker ("only chosen before the run"): bring it back for the next run
+    route.el.style.display = '';
     el.style.background = '#000';
     el.style.display = 'flex';
     setBegin(true, 'Click to begin');
     getPlayerController()?.controls.unlock();
+    route.capture(); // redraw the map and the saved start / goal markers (the street is already loaded)
   };
 
   window.addEventListener('keydown', (e) => {

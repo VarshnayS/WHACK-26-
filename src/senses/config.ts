@@ -31,7 +31,7 @@ export const IDLE_PULSE_RANGE = 1.5;
  * auto-sweep (two-point touch synced to the footsteps). This is its starting state with keyboard and
  * mouse; a controller connecting switches it on (src/senses/cane.ts setAutoSweepDefault).
  */
-export const CANE_AUTO_SWEEP = false;
+export const CANE_AUTO_SWEEP = true;
 /** Horizontal reach of the cane tip in front of the feet (m). */
 export const CANE_REACH = 1.2;
 /** Full sweep arc (degrees), centred on where the player faces. */

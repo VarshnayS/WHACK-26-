@@ -6,12 +6,16 @@ import type { PingType } from '../shared/contracts';
 
 // --- spawn -----------------------------------------------------------------------------------------
 
-/** It spawns at a random spot inside the play area, at least SPAWN_MIN_DIST from the player
- * (preferably no further than SPAWN_MAX_DIST). The corridor is 200 x 80 m. */
-export const SPAWN_MIN_DIST = 50;
-export const SPAWN_MAX_DIST = 90;
+/** It spawns inside the play area (the corridor, 200 x 80 m), between SPAWN_MIN_DIST and SPAWN_MAX_DIST
+ * from the player's START point: far enough not to catch them at once, close enough to hear them. */
+export const SPAWN_MIN_DIST = 30;
+export const SPAWN_MAX_DIST = 80;
+/** With a goal set: it spawns at least this far (m) from the straight line start -> goal, on a random
+ * side of it, so it flanks the route instead of standing on it. Halved, then dropped, only if no
+ * spot qualifies. */
+export const SPAWN_PATH_CLEARANCE = 15;
 /** It never spawns within this distance of the run's goal point (route picker on the start screen). */
-export const SPAWN_GOAL_MIN_DIST = 40;
+export const SPAWN_GOAL_MIN_DIST = 30;
 /** A player jump bigger than this in one frame is a teleport (e.g. "begin" moving you to the start
  * point): it re-spawns away from the new position and waits for the player again. */
 export const TELEPORT_DIST = 5;
