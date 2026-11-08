@@ -76,6 +76,21 @@ export const REFERENCE_RANGE = 40;
 export const RANGE_FACTOR_MIN = 0.25;
 export const RANGE_FACTOR_MAX = 1.5;
 
+/** Jumpscare when it catches you (src/game/flow.ts waits this long before fading to the report). */
+export const JUMPSCARE_S = 1.5;
+/** It appears this far in front of the camera (m) for the jumpscare. */
+export const JUMPSCARE_DIST = 1.3;
+/** Red pulses fired from its head during the jumpscare: every N seconds, reaching M metres. */
+export const JUMPSCARE_PING_EVERY = 0.35;
+export const JUMPSCARE_PING_RANGE = 6;
+
+/** Its red 'entity' sonar pulse (a heartbeat): every HEARTBEAT_EVERY seconds (+/- 15%), reaching
+ * HEARTBEAT_RANGE metres, so it lights itself and the street around it and never appears from nowhere. */
+export const HEARTBEAT_EVERY = 2.5;
+export const HEARTBEAT_RANGE = 12;
+/** Height of the pulse's origin above its feet (m): mid-body, so it lights the whole figure. */
+export const HEARTBEAT_HEIGHT = 1.2;
+
 /**
  * How loud each ping type is to the entity. Voice and impact are loud, footsteps quiet, cars and
  * pedestrians background (only heard when very close).
@@ -88,6 +103,7 @@ export const TYPE_LOUDNESS: Record<PingType, number> = {
   car: 0.1,
   pedestrian: 0.1,
   tactile: 0.1,
+  entity: 0, // its own heartbeat pulses
 };
 
 /** Ping types the player makes. Hearing one of these close enough starts a chase. */

@@ -7,14 +7,9 @@
  *            game has begun at least once (the first load keeps updating so the loading gate works)
  *   playing  normal play
  *   paused   Esc (mouse unlocked while playing): Resume / Quit to Menu
-<<<<<<< HEAD
  *   dead     'caught': freeze, a ~1.5 s jumpscare (src/entity: it lunges in front of the camera and
  *            screams), then fade audio + scene to black, then the audit report with a
  *            "Return to Main Menu" button. Jumpscare added by ENTITY (Ayo).
-=======
- *   dead     'caught': freeze, fade audio + scene to black, then the audit report with a
- *            "Return to Main Menu" button
->>>>>>> origin/main
  *
  * "Frozen" means main.ts skips runUpdates() (isSimulationRunning() is false). Rendering keeps going
  * so the audit report can still capture the scene; the fade to black is a CSS overlay.
@@ -28,11 +23,7 @@ import { getPlayerController } from '../player/controller';
 import { sampleGround } from '../world/heightField';
 import { resetAgents } from '../world/agents';
 import { isDebugCameraActive, setDebugCamera } from '../world/debugCamera';
-<<<<<<< HEAD
 import { playJumpscare, resetEntity, setEntityEnabled } from '../entity';
-=======
-import { resetEntity, setEntityEnabled } from '../entity';
->>>>>>> origin/main
 import { getListener } from '../entity/audio';
 import { fadeSoundscape } from '../audio/soundscape';
 import { isOverlayOpen, onMenuBegin, reopenMainMenu } from '../hud/startScreen';
@@ -219,7 +210,6 @@ function onCaught(): void {
   state = 'dead';
   getPlayerController()?.setEnabled(false); // zeroes velocity and releases the pointer
   clearHeldKeys();
-<<<<<<< HEAD
   // Jumpscare first (it animates on its own while the simulation is frozen), then the fade + report.
   const scareS = playJumpscare();
   deathTimer = window.setTimeout(() => {
@@ -232,15 +222,6 @@ function onCaught(): void {
       returnButton.style.display = 'block';
     }, DEATH_FADE_S * 1000 + 200);
   }, scareS * 1000);
-=======
-  fadeAudio(0, DEATH_FADE_S);
-  showBlackout(true, DEATH_FADE_S);
-  deathTimer = window.setTimeout(() => {
-    if (state !== 'dead') return;
-    setReportOpen(true);
-    returnButton.style.display = 'block';
-  }, DEATH_FADE_S * 1000 + 200);
->>>>>>> origin/main
 }
 
 function openPause(): void {
