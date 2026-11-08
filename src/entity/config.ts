@@ -87,6 +87,7 @@ export const TYPE_LOUDNESS: Record<PingType, number> = {
   footstep: 0.3,
   car: 0.1,
   pedestrian: 0.1,
+  tactile: 0.1,
 };
 
 /** Ping types the player makes. Hearing one of these close enough starts a chase. */
