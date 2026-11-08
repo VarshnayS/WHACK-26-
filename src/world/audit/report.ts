@@ -25,6 +25,8 @@ import {
 } from '../../config';
 import type { World } from '../index';
 import { getTiles } from '../tiles';
+import { isRevealAll, setRevealAll } from '../../render/sonarMaterial';
+import { captureTopDownMap, worldToMap, type TopDownView } from './topDownMap';
 import {
   clearEvents,
   getAllEvents,
@@ -68,19 +70,7 @@ interface Aggregate {
   runCount: number;
 }
 
-interface SnapshotView {
-  /** Centre of the ground-plane view in local world metres. */
-  centerX: number;
-  centerZ: number;
-  /** Camera-local screen-right and screen-up, projected into the world X/Z plane. */
-  rightX: number;
-  rightZ: number;
-  upX: number;
-  upZ: number;
-  /** Half-extents of the perspective frustum where it intersects the centre ground plane. */
-  halfWidth: number;
-  halfHeight: number;
-}
+type SnapshotView = TopDownView;
 
 interface DrawRect {
   x: number;
@@ -356,16 +346,14 @@ export function initReport(world: World): () => void {
   }
 
   /**
-   * Capture the currently loaded 3D scene once.
-   *
-   * All camera properties changed here are restored in finally, including the projection
-   * matrix. A single TilesRenderer update is requested at the temporary pose so its current
-   * visibility/LOD selection is aligned with the snapshot camera; tile downloads themselves
-   * remain asynchronous and are not waited on.
+   * Capture the currently loaded 3D scene once (src/world/audit/topDownMap.ts, shared with the
+   * start screen's route picker). The live camera is restored inside captureTopDownMap().
    */
   function captureSnapshot(): boolean {
-    if (!context || !snapshotContext) {
-      snapshotError = 'Could not create a 2D canvas context.';
+    fitCanvasToRenderer();
+    const map = captureTopDownMap(world, { paddingM: SNAPSHOT_PADDING_METRES, into: snapshotCanvas });
+    if (!map) {
+      snapshotError = 'Could not render the top-down view (see the console).';
       return false;
     }
     const source = world.renderer.domElement;
@@ -374,6 +362,14 @@ export function initReport(world: World): () => void {
     // The report is a map of the whole playable corridor, not a view centred on
     // wherever the player happens to be when the report opens.
     const target = new THREE.Vector3(0, 0, 0);
+
+    // The game is drawn with a sonar mask that hides everything the player hasn't "heard", so without
+    // this the overview is black (only the player's arm's reach would show). Reveal the whole grid for
+    // this one render and hide the moving things (people, cars, the entity) so the map is clean.
+    const savedRevealAll = isRevealAll();
+    const entityBody = world.scene.getObjectByName('entity');
+    const savedAgentsVisible = world.agentsGroup.visible;
+    const savedEntityVisible = entityBody?.visible ?? true;
 
     const savedCamera = {
       position: camera.position.clone(),
@@ -393,6 +389,9 @@ export function initReport(world: World): () => void {
     const corridorAcross = new THREE.Vector3(Math.cos(bearing), 0, Math.sin(bearing));
 
     try {
+      setRevealAll(true);
+      world.agentsGroup.visible = false;
+      if (entityBody) entityBody.visible = false;
       fitCanvasToRenderer();
 
       const aspect = sourceWidth / sourceHeight;
@@ -429,12 +428,12 @@ export function initReport(world: World): () => void {
 
       // Required synchronous WebGL render, followed immediately by a 2D canvas copy.
       world.renderer.render(world.scene, camera);
-      context.drawImage(source, 0, 0, sourceWidth, sourceHeight);
+      context!.drawImage(source, 0, 0, sourceWidth, sourceHeight);
 
       // Copy the just-captured WebGL frame to the persistent cache before any heat is drawn.
       snapshotCanvas.width = sourceWidth;
       snapshotCanvas.height = sourceHeight;
-      snapshotContext.drawImage(canvas, 0, 0, sourceWidth, sourceHeight);
+      snapshotContext!.drawImage(canvas, 0, 0, sourceWidth, sourceHeight);
 
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
       const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
@@ -467,6 +466,9 @@ export function initReport(world: World): () => void {
       console.warn('[audit] Could not capture the world snapshot:', error);
       return false;
     } finally {
+      setRevealAll(savedRevealAll);
+      world.agentsGroup.visible = savedAgentsVisible;
+      if (entityBody) entityBody.visible = savedEntityVisible;
       // Restore the live player camera exactly as it was before the snapshot.
       camera.position.copy(savedCamera.position);
       camera.rotation.copy(savedCamera.rotation);
@@ -503,15 +505,8 @@ export function initReport(world: World): () => void {
     const ordered = data.cells.slice().sort((a, b) => a.total - b.total);
 
     for (const cell of ordered) {
-      const dx = cell.x - view.centerX;
-      const dz = cell.z - view.centerZ;
-
-      // Project local X/Z into the snapshot camera's screen-right / screen-up axes.
-      const screenX = dx * view.rightX + dz * view.rightZ;
-      const screenY = dx * view.upX + dz * view.upZ;
-
-      const nx = screenX / (view.halfWidth * 2) + 0.5;
-      const ny = 0.5 - screenY / (view.halfHeight * 2);
+      // Project local X/Z into the snapshot image (0..1).
+      const { u: nx, v: ny } = worldToMap(view, cell.x, cell.z);
 
       // Skip hotspots outside the captured world rectangle.
       if (nx < 0 || nx > 1 || ny < 0 || ny > 1) continue;

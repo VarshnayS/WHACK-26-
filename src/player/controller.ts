@@ -2,6 +2,10 @@
 //
 // First-person controller: WASD + mouse look (PointerLockControls), momentum,
 // raycast ground-following, wall sliding, rebound, and the collision "stun" penalty.
+// Movement comes from src/player/input.ts: keyboard + controller stick, added together and clamped.
+// Keyboard alone behaves exactly as before PR #20: speed builds up to MAX_SPEED while a key is held
+// (no Shift, no walk cap). The stick uses the same momentum; how far it's pushed scales the top speed.
+// onPlayerImpact() reports every bump and stun (haptics).
 
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
@@ -18,6 +22,8 @@ import {
   type CollisionHit,
 } from './collision';
 import { createStunEffect } from './stunEffect';
+import { recordAudit } from './auditRecord';
+import { attachInput, clearHeldInput, readMove, type MoveInput } from './input';
 import { clampToPlayArea, isInsidePlayArea } from '../world/playArea';
 
 
@@ -25,7 +31,7 @@ import { clampToPlayArea, isInsidePlayArea } from '../world/playArea';
 // Tuning
 // ---------------------------------------------------------------------------
 
-const MAX_SPEED = 5.5;          // m/s, cap (a brisk run)
+const MAX_SPEED = 5.5;          // m/s, cap (a brisk run); a part-pushed stick scales it down
 const ACCELERATION = 3.0;       // m/s^2 while a key is held (~1.8 s to reach max)
 const DECELERATION = 4.0;       // m/s^2 friction when no key is held (~1.4 s to stop)
 const TURN_FRICTION = 4.0;      // 1/s, bleeds sideways velocity so direction changes feel responsive
@@ -85,6 +91,29 @@ export interface StunnedPayload {
   source: 'wall' | 'impulse';
 }
 
+/** A bump or stun, for haptics. `level` is the stun effect's intensity (the existing impact score). */
+export interface PlayerImpact {
+  /** 0..1: BUMP_EFFECT_INTENSITY (0.25) for a light knock, 0.5..1 for a stun (0.5 + 0.5 t). */
+  level: number;
+  stunned: boolean;
+  /** m/s along the contact normal. */
+  impactSpeed: number;
+  source: StunnedPayload['source'];
+  /** applyImpulse(..., { forceStun: true }): only car hits do this. */
+  forced: boolean;
+}
+type ImpactFn = (impact: PlayerImpact) => void;
+const impactListeners = new Set<ImpactFn>();
+
+/** Called on every bump and stun (walls, pedestrians, cars). Returns unsubscribe. */
+export function onPlayerImpact(fn: ImpactFn): () => void {
+  impactListeners.add(fn);
+  return () => impactListeners.delete(fn);
+}
+function notifyImpact(impact: PlayerImpact): void {
+  for (const fn of impactListeners) fn(impact);
+}
+
 export interface PlayerController {
   controls: PointerLockControls;
   /** Current horizontal speed in m/s. */
@@ -98,22 +127,16 @@ export interface PlayerController {
    */
   applyImpulse(impulse: THREE.Vector3, options?: ImpulseOptions): void;
   isStunned(): boolean;
+  /** Clear stun, velocity, held keys and the daze effect (used when a run restarts). */
+  reset(): void;
+  /**
+   * Teleport to `position` (x/z; y snaps to the ground), stop, clear any stun, and face `lookAt`
+   * if given (level gaze). Clamped inside the corridor walls. Used for the route's start point.
+   */
+  placeAt(position: THREE.Vector3, lookAt?: THREE.Vector3): void;
   /** Disable e.g. while the free-fly debug camera is active. */
   setEnabled(enabled: boolean): void;
   dispose(): void;
-}
-
-// ---------------------------------------------------------------------------
-// Keyboard state
-// ---------------------------------------------------------------------------
-
-const keys = new Set<string>();
-const onKeyDown = (e: KeyboardEvent) => keys.add(e.code);
-const onKeyUp = (e: KeyboardEvent) => keys.delete(e.code);
-const onBlur = () => keys.clear(); // avoid "stuck" keys when the window loses focus
-
-function axis(positive: string, negative: string): number {
-  return (keys.has(positive) ? 1 : 0) - (keys.has(negative) ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +156,7 @@ const lastNormal = new THREE.Vector3();
 const lastPoint = new THREE.Vector3();
 const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const UP = new THREE.Vector3(0, 1, 0);
+const move: MoveInput = { x: 0, z: 0, amount: 0 };
 
 let current: PlayerController | null = null;
 let lastLoggedWallObject: THREE.Object3D | null = null;
@@ -165,9 +189,7 @@ export function initController(options: ControllerOptions = {}): PlayerControlle
     if (enabled && !controls.isLocked) controls.lock();
   };
   world.renderer.domElement.addEventListener('click', onClick);
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
-  window.addEventListener('blur', onBlur);
+  const detachInput = attachInput();
 
 /**
  * Check for walls in the direction of travel and slide along them.
@@ -244,7 +266,10 @@ function resolveWalls(pos: THREE.Vector3): number {
    */
   function stunFromImpact(impactSpeed: number, force: boolean): void {
     if (impactSpeed < STUN_SPEED_THRESHOLD && !force) {
-      if (impactSpeed >= REBOUND_MIN_IMPACT) effect.trigger(BUMP_EFFECT_DURATION, BUMP_EFFECT_INTENSITY);
+      if (impactSpeed >= REBOUND_MIN_IMPACT) {
+        effect.trigger(BUMP_EFFECT_DURATION, BUMP_EFFECT_INTENSITY);
+        notifyImpact({ level: BUMP_EFFECT_INTENSITY, stunned: false, impactSpeed, source: 'impulse', forced: false });
+      }
       return;
     }
     const t = THREE.MathUtils.clamp(
@@ -258,6 +283,7 @@ function resolveWalls(pos: THREE.Vector3): number {
     options.onStunned?.(duration, impactSpeed);
     // agents.ts / SOUND already fire the red impact ping and the audit record for agent hits
     emitStunned(duration, impactSpeed, 0.5 + 0.5 * t, camera.position, 'impulse');
+    notifyImpact({ level: 0.5 + 0.5 * t, stunned: true, impactSpeed, source: 'impulse', forced: force });
   }
 
   function emitStunned(
@@ -273,7 +299,7 @@ function resolveWalls(pos: THREE.Vector3): number {
 
   /** Wall/tile hit: audit record (contract: SENSES records wall collisions) + red ring on a stun. */
   function wallHit(impactSpeed: number, stunned: boolean): void {
-    world.audit.record({
+    recordAudit(world, {
       kind: 'collision',
       hit: 'building',
       position: lastPoint.clone(),
@@ -302,13 +328,14 @@ function resolveWalls(pos: THREE.Vector3): number {
       pos.z += velocity.z * dt;
     } else {
       // ---- 1. Input -> wish direction (relative to where the camera faces) ----
-      const ix = controls.isLocked ? axis('KeyD', 'KeyA') : 0;
-      const iz = controls.isLocked ? axis('KeyW', 'KeyS') : 0;
+      // Keyboard (only while the mouse is locked, as before) + stick, clamped to length 1.
+      readMove(controls.isLocked, move);
+      const cap = MAX_SPEED * move.amount; // keyboard alone: amount = 1
 
       euler.setFromQuaternion(camera.quaternion);
       forward.set(0, 0, -1).applyAxisAngle(UP, euler.y);
       right.set(-forward.z, 0, forward.x);
-      wish.set(0, 0, 0).addScaledVector(forward, iz).addScaledVector(right, ix);
+      wish.set(0, 0, 0).addScaledVector(forward, move.z).addScaledVector(right, move.x);
 
       // ---- 2. Momentum / friction ----
       if (wish.lengthSq() > 0) {
@@ -318,9 +345,15 @@ function resolveWalls(pos: THREE.Vector3): number {
         lateral.copy(velocity).addScaledVector(wish, -along);
         lateral.multiplyScalar(Math.max(0, 1 - TURN_FRICTION * dt));
         velocity.copy(lateral).addScaledVector(wish, along);
-        // Speed builds up the longer the key is held.
-        velocity.addScaledVector(wish, ACCELERATION * dt);
-        if (velocity.length() > MAX_SPEED) velocity.setLength(MAX_SPEED);
+        const speed = velocity.length();
+        if (cap < MAX_SPEED && speed > cap) {
+          // eased off the stick: slow down to the new top speed (the keyboard never gets here)
+          velocity.setLength(Math.max(cap, speed - DECELERATION * dt));
+        } else {
+          // Speed builds up the longer the key is held.
+          velocity.addScaledVector(wish, ACCELERATION * dt);
+          if (velocity.length() > cap) velocity.setLength(cap);
+        }
       } else {
         const speed = velocity.length();
         if (speed > 0) {
@@ -353,9 +386,11 @@ function resolveWalls(pos: THREE.Vector3): number {
         options.onStunned?.(duration, impactSpeed);
         wallHit(impactSpeed, true);
         emitStunned(duration, impactSpeed, 0.5 + 0.5 * t, lastPoint, 'wall');
+        notifyImpact({ level: 0.5 + 0.5 * t, stunned: true, impactSpeed, source: 'wall', forced: false });
       } else if (impactSpeed >= REBOUND_MIN_IMPACT) {
         effect.trigger(BUMP_EFFECT_DURATION, BUMP_EFFECT_INTENSITY); // light bump: small wobble
         wallHit(impactSpeed, false);
+        notifyImpact({ level: BUMP_EFFECT_INTENSITY, stunned: false, impactSpeed, source: 'wall', forced: false });
       }
 
       // ---- 6. Apply horizontal movement ----
@@ -387,6 +422,29 @@ function resolveWalls(pos: THREE.Vector3): number {
       stunFromImpact(impulseOptions.impactSpeed ?? 0, impulseOptions.forceStun ?? false);
     },
     isStunned: () => stunTimer > 0,
+    reset() {
+      stunTimer = 0;
+      velocity.set(0, 0, 0);
+      clearHeldInput();
+      effect.reset();
+    },
+    placeAt(position, lookAt) {
+      const pos = camera.position;
+      pos.x = position.x;
+      pos.z = position.z;
+      velocity.set(0, 0, 0);
+      stunTimer = 0;
+      keepInsidePlayArea(pos);
+      pos.y = groundHeight(pos) + PLAYER_HEIGHT;
+      if (lookAt) {
+        const dx = lookAt.x - pos.x;
+        const dz = lookAt.z - pos.z;
+        // forward is (-sin yaw, 0, -cos yaw) in the YXZ euler update() reads
+        if (dx * dx + dz * dz > 1e-6) camera.quaternion.setFromEuler(euler.set(0, Math.atan2(-dx, -dz), 0, 'YXZ'));
+      }
+      camera.updateMatrixWorld(true);
+      lastLoggedWallObject = null;
+    },
     setEnabled(value: boolean) {
       enabled = value;
       if (!value) {
@@ -396,9 +454,7 @@ function resolveWalls(pos: THREE.Vector3): number {
     },
     dispose() {
       world.renderer.domElement.removeEventListener('click', onClick);
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
+      detachInput();
       effect.dispose();
       controls.dispose();
       if (current === controller) current = null;

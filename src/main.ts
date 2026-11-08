@@ -17,6 +17,7 @@ import { initAudit } from './world/audit/log';
 import { initSoundSources } from './world/soundSources';
 import { initSenses } from './senses';
 import { initEntity } from './entity';
+import { initFlow, isSimulationRunning } from './game/flow';
 
 function setupRenderer(): void {
   const { renderer, camera } = world;
@@ -40,17 +41,22 @@ async function start(): Promise<void> {
   await initAgents(); // A
   initController(); // C
   initAudit(world); // audit: world.audit + V report + J test events
+  // initAudit replaced world.audit with an API that has log() but no record(). controller.ts, cane.ts,
+  // soundSources.ts and entity/ still call world.audit.record(), which would throw and abort the frame.
+  // A no-op loses nothing: wall and agent hits are logged through log() (collision.ts, agents.ts) and
+  // catches by log.ts's own 'caught' listener.
+  (world.audit as { record?: (e: unknown) => void }).record ??= () => {};
   void initMic(); // C (waits for a user gesture itself)
   initSoundSources(world); // stub: sound sources (src/world/soundSources.ts)
-  initAudit(world); // stub: scoring / accessibility audit (src/audit/)
   initSenses(world); // stub: vision and other senses (src/senses/)
   initEntity(world); // stub: the entity (src/entity/)
+  initFlow(world); // game flow: main menu, death, pause, quit to menu (src/game/)
 
   let last = performance.now();
   world.renderer.setAnimationLoop((now: number) => {
     const dt = Math.min((now - last) / 1000, 0.1); // clamp after tab switches
     last = now;
-    runUpdates(dt);
+    if (isSimulationRunning()) runUpdates(dt); // frozen on the death screen, pause and menu (after the first start)
     updatePings(world.camera.position); // B
     world.renderer.render(world.scene, world.camera);
   });

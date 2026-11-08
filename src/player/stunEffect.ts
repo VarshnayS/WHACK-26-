@@ -19,6 +19,8 @@ export interface StunEffect {
   update(dt: number): void;
   /** Metres to lower the camera by this frame. */
   readonly headDip: number;
+  /** Cancel any effect in progress straight away (no fade). */
+  reset(): void;
   dispose(): void;
 }
 
@@ -87,6 +89,15 @@ export function createStunEffect(canvas: HTMLCanvasElement): StunEffect {
 
       (fx as { headDip: number }).headDip =
         MAX_HEAD_DIP * env * (0.75 + 0.25 * Math.sin(elapsed * 9));
+    },
+
+    reset() {
+      active = false;
+      elapsed = 0;
+      (fx as { headDip: number }).headDip = 0;
+      canvas.style.transform = '';
+      canvas.style.filter = '';
+      flash.style.opacity = '0';
     },
 
     dispose() {

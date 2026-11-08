@@ -11,7 +11,11 @@ import type { Vector3 } from 'three';
 // --- sonar pings ---------------------------------------------------------------------------------
 
 /** What made a ping. The sonar look (speed, thickness, colour) can differ per type. */
+<<<<<<< HEAD
 export type PingType = 'voice' | 'footstep' | 'cane' | 'car' | 'pedestrian' | 'impact' | 'tactile' | 'entity';
+=======
+export type PingType = 'voice' | 'footstep' | 'cane' | 'car' | 'pedestrian' | 'impact' | 'tactile';
+>>>>>>> origin/main
 
 /** How a ping is drawn. */
 export interface PingStyle {

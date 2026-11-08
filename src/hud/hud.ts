@@ -9,6 +9,9 @@
 
 import { initStunVignette } from './stunVignette';
 import { initStartScreen } from './startScreen';
+import { initGoalPointer } from './goalPointer';
+import { initGoalBeacon } from '../player/goalBeacon';
+import { initInputHud } from './inputHud';
 import { world } from '../world';
 
 let tileAttributionEl: HTMLElement | null = null;
@@ -20,7 +23,10 @@ export function initHud(): void {
 
   initStunVignette(root);
   initStartScreen(root);
+  initGoalPointer(root);
+  initGoalBeacon();
   initVisionLabel(root);
+  initInputHud(root);
 
   const attribution = document.createElement('div');
   // above the start screen too: attribution must always stay visible

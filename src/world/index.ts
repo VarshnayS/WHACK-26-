@@ -17,7 +17,9 @@ import type {
   ActivePing,
   AuditEvent,
   EntityState,
+  FeatureName,
   PingType,
+  TactileStrip,
   VisionMode,
   WorldEventCallback,
   WorldEventName,
@@ -83,7 +85,19 @@ export interface World {
   setVision(id: string): void;
   /** The entity hunting the player, or null while none exists. src/entity/ sets it. */
   entity: EntityState | null;
-  /** Tiny event bus. Events: 'caught', 'entityState', 'stunned'. */
+  /** Optional features and whether each is on. Default: all off. Read-only; use setFeature(). */
+  readonly features: Readonly<Record<FeatureName, boolean>>;
+  /** Switch a feature on or off. Emits 'featureChanged' with { name, on } (FeatureChangedPayload). */
+  setFeature(name: FeatureName, on: boolean): void;
+  /**
+   * Tactile paving. `strips` is filled by src/world/tactile*.ts; query() returns the strip
+   * within `radius` metres of `pos` (or under it), or null. Stub: no strips, query() returns null.
+   */
+  tactile: {
+    strips: TactileStrip[];
+    query(pos: THREE.Vector3, radius: number): TactileStrip | null;
+  };
+  /** Tiny event bus. Events: 'caught', 'entityState', 'stunned', 'featureChanged'. */
   on(name: WorldEventName, cb: WorldEventCallback): void;
   off(name: WorldEventName, cb: WorldEventCallback): void;
   emit(name: WorldEventName, payload?: unknown): void;
@@ -106,6 +120,8 @@ agentsGroup.name = 'agents';
 scene.add(tilesGroup, agentsGroup, camera);
 
 const listeners = new Map<WorldEventName, Set<WorldEventCallback>>();
+
+const features: Record<FeatureName, boolean> = { tactile: false };
 
 /** Default vision: total blindness. */
 const BLIND: VisionMode = {
@@ -140,6 +156,17 @@ export const world: World = {
   vision: BLIND,
   setVision() {},
   entity: null,
+  features,
+  setFeature(name, on) {
+    features[name] = on;
+    world.emit('featureChanged', { name, on });
+  },
+  tactile: {
+    strips: [],
+    query() {
+      return null;
+    },
+  },
   on(name, cb) {
     let set = listeners.get(name);
     if (!set) listeners.set(name, (set = new Set()));

@@ -43,6 +43,10 @@ export interface BrainEnv {
   /** Nearest point inside the corridor, kept `inset` metres off the walls. */
   clamp: (p: THREE.Vector3, inset: number) => THREE.Vector3;
   random?: () => number;
+  /** Extra places it must not spawn near (e.g. the run's goal point). */
+  avoid?: () => { position: THREE.Vector3; radius: number }[];
+  /** The run's goal, or null. With it, spawns keep off the straight line from the player's start to it. */
+  goal?: () => THREE.Vector3 | null;
 }
 
 export type BrainEvent =
@@ -110,18 +114,9 @@ export class EntityBrain {
     return this.waypoints;
   }
 
-  /** Place it on a graph node far from the player (or a random corridor point) and start patrolling. */
-  spawn(playerPos: THREE.Vector3, minDist = 40, maxDist = 90): void {
-    const graph = this.env.graph();
-    const nodes = graph ? nodesInRing(graph, playerPos, minDist, maxDist) : [];
-    if (graph && nodes.length > 0) {
-      this.position.copy(graph.positions[nodes[Math.floor(this.random() * nodes.length)]]);
-    } else {
-      const a = this.random() * Math.PI * 2;
-      const r = minDist + this.random() * (maxDist - minDist);
-      this.position.set(playerPos.x + Math.sin(a) * r, 0, playerPos.z + Math.cos(a) * r);
-    }
-    this.position.copy(this.env.clamp(this.position, C.WALL_INSET));
+  /** Place it per pickSpawn() (distance band, off the start -> goal line, inside the map) and start patrolling. */
+  spawn(playerPos: THREE.Vector3, minDist = C.SPAWN_MIN_DIST, maxDist = C.SPAWN_MAX_DIST): void {
+    this.position.copy(this.pickSpawn(playerPos, minDist, maxDist));
     this.position.y = this.env.ground(this.position.x, this.position.z);
     this.velocity.set(0, 0, 0);
     this.timeSinceSound = Infinity;
@@ -233,8 +228,91 @@ export class EntityBrain {
 
   // ---------------------------------------------------------------------------------------------
 
+  /**
+   * Where to spawn. `anchor` is the player's start point. A spot must be:
+   *  - inside the play area (inside the corridor walls, never clamped onto them),
+   *  - between minDist and maxDist from the anchor,
+   *  - outside every env.avoid() zone (the goal),
+   *  - with a goal: at least C.SPAWN_PATH_CLEARANCE from the straight line anchor -> goal, so it
+   *    approaches from the flank. A random side (left / right) is preferred, the other is the fallback.
+   * Footway nodes are tried first (it can path from there), then free points in the ring. If nothing
+   * qualifies the clearance is halved, then dropped; the last resort is the old "best score" pick.
+   */
+  private pickSpawn(anchor: THREE.Vector3, minDist: number, maxDist: number): THREE.Vector3 {
+    const inside = (p: THREE.Vector3) => distXZ(this.env.clamp(p.clone(), C.WALL_INSET), p) < 0.01;
+    const zones = this.env.avoid?.() ?? [];
+    const goal = this.env.goal?.() ?? null;
+
+    // geometry of the line anchor -> goal (XZ)
+    const dx = goal ? goal.x - anchor.x : 0;
+    const dz = goal ? goal.z - anchor.z : 0;
+    const len2 = dx * dx + dz * dz;
+    const hasLine = len2 > 1;
+    /** Distance to the segment, and which side of it (+1 / -1) the point is on. */
+    const fromLine = (p: THREE.Vector3): { dist: number; side: number } => {
+      if (!hasLine) return { dist: Infinity, side: 1 };
+      const px = p.x - anchor.x;
+      const pz = p.z - anchor.z;
+      const t = THREE.MathUtils.clamp((px * dx + pz * dz) / len2, 0, 1);
+      return { dist: Math.hypot(px - t * dx, pz - t * dz), side: dx * pz - dz * px >= 0 ? 1 : -1 };
+    };
+
+    const valid = (p: THREE.Vector3, clearance: number): boolean => {
+      const d = distXZ(p, anchor);
+      if (d < minDist || d > maxDist) return false;
+      if (zones.some((z) => z.radius > 0 && distXZ(p, z.position) < z.radius)) return false;
+      if (hasLine && fromLine(p).dist < clearance) return false;
+      return inside(p);
+    };
+    const pick = <T>(list: T[]): T => list[Math.floor(this.random() * list.length)];
+    /** A random candidate on the preferred side if there is one, else any. */
+    const preferred = this.random() < 0.5 ? 1 : -1;
+    const choose = (list: THREE.Vector3[]): THREE.Vector3 => {
+      const onSide = hasLine ? list.filter((p) => fromLine(p).side === preferred) : [];
+      return pick(onSide.length > 0 ? onSide : list).clone();
+    };
+
+    const graph = this.env.graph();
+    const clearances = hasLine ? [C.SPAWN_PATH_CLEARANCE, C.SPAWN_PATH_CLEARANCE / 2, 0] : [0];
+    for (const clearance of clearances) {
+      if (graph && graph.positions.length > 0) {
+        const nodes = graph.positions.filter((p) => valid(p, clearance));
+        if (nodes.length > 0) return choose(nodes);
+      }
+      const free: THREE.Vector3[] = [];
+      for (let i = 0; i < 96; i++) {
+        const a = this.random() * Math.PI * 2;
+        const r = minDist + this.random() * (maxDist - minDist);
+        const p = new THREE.Vector3(anchor.x + Math.sin(a) * r, 0, anchor.z + Math.cos(a) * r);
+        if (valid(p, clearance)) free.push(p);
+      }
+      if (free.length > 0) return choose(free);
+    }
+
+    // Last resort (a tiny or odd play area): the clamped ring point that comes closest to the rules.
+    let best = anchor.clone();
+    let bestScore = -Infinity;
+    for (let i = 0; i < 64; i++) {
+      const a = this.random() * Math.PI * 2;
+      const r = minDist + this.random() * (maxDist - minDist);
+      const p = this.env.clamp(new THREE.Vector3(anchor.x + Math.sin(a) * r, 0, anchor.z + Math.cos(a) * r), C.WALL_INSET);
+      const score = Math.min(distXZ(p, anchor) - minDist, hasLine ? fromLine(p).dist - C.SPAWN_PATH_CLEARANCE : Infinity);
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    return best;
+  }
+
   /** Smoothed player velocity from frame-to-frame movement (teleports ignored). */
   private trackPlayer(dt: number, playerPos: THREE.Vector3): void {
+    // Teleported (new run / start point): start over away from the new position.
+    if (C.OMNISCIENT && this.lastPlayerPos && distXZ(playerPos, this.lastPlayerPos) > C.TELEPORT_DIST) {
+      this.spawn(playerPos);
+      this.lastPlayerPos = playerPos.clone();
+      return;
+    }
     if (this.lastPlayerPos && dt > 0) {
       const vx = (playerPos.x - this.lastPlayerPos.x) / dt;
       const vz = (playerPos.z - this.lastPlayerPos.z) / dt;
