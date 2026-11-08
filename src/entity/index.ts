@@ -26,7 +26,7 @@ import { sampleGround } from '../world/heightField';
 import { EntityBrain, type Sound } from './brain';
 import { createEntityBody } from './body';
 import { initEntityDebug } from './debug';
-import { initEntityAudio } from './audio';
+import { initEntityAudio, setEntityVolume } from './audio';
 import { AUDIO_ENABLED, FOOTSTEP_PING_EVERY, FOOTSTEP_PING_RANGE } from './config';
 
 /** A ping as the entity sees it, whichever list it came from. */
@@ -44,6 +44,9 @@ const seen = new Map<string, number>();
 
 let brain: EntityBrain | null = null;
 let resetFn: (() => void) | null = null;
+let applyEnabledFn: (() => void) | null = null;
+/** false = no hunting: hidden, silent, never catches (world.entity is null). Set from the main menu. */
+let enabled = true;
 
 function nowSeconds(): number {
   return performance.now() / 1000;
@@ -104,6 +107,10 @@ export function initEntity(world: World): void {
   const last = b.position.clone();
 
   world.onUpdate((dt) => {
+    if (!enabled) {
+      audio?.(dt); // keeps its (muted) buses settled
+      return;
+    }
     const t = nowSeconds();
 
     // Forget old bookkeeping.
@@ -148,10 +155,28 @@ export function initEntity(world: World): void {
     walked = 0;
   };
 
+  applyEnabledFn = () => {
+    body.root.visible = enabled;
+    setEntityVolume(enabled ? 1 : 0);
+    if (enabled) {
+      resetFn?.(); // respawn far from the player, patrolling
+      world.entity = state;
+    } else {
+      world.entity = null;
+    }
+  };
+
   if (import.meta.env.DEV) {
     (window as unknown as { __entity: unknown }).__entity = { brain: b, body: body.root, reset: resetEntity };
   }
   console.info(`[entity] spawned ${b.position.distanceTo(player).toFixed(0)} m away`);
+}
+
+/** Turn the whole entity on or off (main menu "Enable Entity"). Off: hidden, silent, never catches. */
+export function setEntityEnabled(value: boolean): void {
+  if (value === enabled) return;
+  enabled = value;
+  applyEnabledFn?.();
 }
 
 /** Respawn far from the player and patrol again (e.g. after a game over). */

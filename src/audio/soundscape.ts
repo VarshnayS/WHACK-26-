@@ -376,6 +376,8 @@ class Soundscape {
 
   private volume = C.MASTER_VOLUME;
   private muted = false;
+  /** 0..1 multiplier for fades (death / pause / quit), on top of volume and mute. */
+  private fade = 1;
   private msgEl: HTMLDivElement | null = null;
   private msgTimer = 0;
 
@@ -385,6 +387,8 @@ class Soundscape {
   private stepSide = 1;
   /** CaneState.tapSerial already played (sweep pings don't bump it, so they stay silent). */
   private caneTapHeard = 0;
+  /** CaneState.touchSerial already played (auto-sweep touch-downs: a soft tick). */
+  private caneTouchHeard = 0;
   private entityNextStep = 0;
   private entityLimp = 1;
   private readonly chatty = new WeakMap<Agent, boolean>();
@@ -657,11 +661,17 @@ class Soundscape {
         return;
       }
       case 'cane': {
-        // Only real taps make a sound; the cane's sweep-sonar pings are silent (src/senses/cane.ts).
+        // Only taps and auto-sweep touch-downs make a sound; the sweep-sonar pings are silent
+        // (src/senses/cane.ts).
         const cane = getCaneState();
-        if (cane.tapSerial === this.caneTapHeard) return;
-        this.caneTapHeard = cane.tapSerial;
-        this.playAt('cane', p.origin, C.CANE_GAIN * (cane.lastTapHard ? 2.2 : 1));
+        if (cane.tapSerial !== this.caneTapHeard) {
+          this.caneTapHeard = cane.tapSerial;
+          this.caneTouchHeard = cane.touchSerial;
+          this.playAt('cane', p.origin, C.CANE_GAIN * (cane.lastTapHard ? 2.2 : 1));
+        } else if (cane.touchSerial !== this.caneTouchHeard) {
+          this.caneTouchHeard = cane.touchSerial;
+          this.playAt('cane', p.origin, C.CANE_TOUCH_GAIN);
+        }
         return;
       }
       default:
@@ -835,7 +845,18 @@ class Soundscape {
   private applyVolume(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, ctx.currentTime, 0.05);
+    this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume * this.fade, ctx.currentTime, 0.05);
+  }
+
+  /** Fade all spatial audio to `level` (0..1) over about `seconds`. */
+  fadeTo(level: number, seconds: number): void {
+    this.fade = clamp(level, 0, 1);
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const g = this.master.gain;
+    g.cancelScheduledValues(ctx.currentTime);
+    g.setValueAtTime(g.value, ctx.currentTime);
+    g.linearRampToValueAtTime(this.muted ? 0 : this.volume * this.fade, ctx.currentTime + Math.max(0.01, seconds));
   }
 
   private show(text: string): void {
@@ -873,6 +894,11 @@ export function startSoundscape(): void {
 /** Debug: how many voices are live right now, or null before init. */
 export function getSoundscapeStats(): ReturnType<Soundscape['stats']> | null {
   return instance?.stats() ?? null;
+}
+
+/** Fade the whole soundscape to `level` (0 = silent, 1 = normal) over `seconds`. */
+export function fadeSoundscape(level: number, seconds: number): void {
+  instance?.fadeTo(level, seconds);
 }
 
 export function disposeSoundscape(): void {
