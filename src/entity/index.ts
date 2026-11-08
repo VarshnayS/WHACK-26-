@@ -28,8 +28,20 @@ import { sampleGround } from '../world/heightField';
 import { EntityBrain, type Sound } from './brain';
 import { createEntityBody } from './body';
 import { initEntityDebug } from './debug';
-import { initEntityAudio, setEntityVolume } from './audio';
-import { AUDIO_ENABLED, FOOTSTEP_PING_EVERY, FOOTSTEP_PING_RANGE, SPAWN_GOAL_MIN_DIST } from './config';
+import { initEntityAudio, playJumpscareSound, setEntityVolume } from './audio';
+import {
+  AUDIO_ENABLED,
+  FOOTSTEP_PING_EVERY,
+  FOOTSTEP_PING_RANGE,
+  HEARTBEAT_EVERY,
+  HEARTBEAT_HEIGHT,
+  HEARTBEAT_RANGE,
+  JUMPSCARE_DIST,
+  JUMPSCARE_PING_EVERY,
+  JUMPSCARE_PING_RANGE,
+  JUMPSCARE_S,
+  SPAWN_GOAL_MIN_DIST,
+} from './config';
 
 /** A ping as the entity sees it, whichever list it came from. */
 interface HeardPing {
@@ -46,6 +58,7 @@ const seen = new Map<string, number>();
 
 let brain: EntityBrain | null = null;
 let resetFn: (() => void) | null = null;
+let jumpscareFn: (() => number) | null = null;
 let applyEnabledFn: (() => void) | null = null;
 /** false = no hunting: hidden, silent, never catches (world.entity is null). Set from the main menu. */
 let enabled = true;
@@ -133,6 +146,7 @@ export function initEntity(world: World): void {
   let walked = 0;
   const last = b.position.clone();
 
+  let heartbeatIn = 0.5; // first pulse shortly after load
   world.onUpdate((dt) => {
     if (!enabled) {
       audio?.(dt); // keeps its (muted) buses settled
@@ -165,6 +179,13 @@ export function initEntity(world: World): void {
       firePing(b.position.clone().setY(b.position.y + 0.05), FOOTSTEP_PING_RANGE, 'pedestrian');
     }
 
+    // Red heartbeat pulse: lights it and its surroundings every ~2.5 s.
+    heartbeatIn -= dt;
+    if (heartbeatIn <= 0) {
+      heartbeatIn = HEARTBEAT_EVERY * (0.85 + Math.random() * 0.3);
+      firePing(b.position.clone().setY(b.position.y + HEARTBEAT_HEIGHT), HEARTBEAT_RANGE, 'entity');
+    }
+
     body.update(dt, b.position, b.heading, b.speed);
 
     state.state = b.state;
@@ -176,7 +197,55 @@ export function initEntity(world: World): void {
     audio?.(dt);
   });
 
+  // --- jumpscare (runs on its own animation frames: the simulation is frozen once you're caught) ---
+  let scareGen = 0;
+  jumpscareFn = () => {
+    if (!enabled) return 0;
+    const gen = ++scareGen;
+    const cam = world.camera;
+
+    // Right in front of you, facing you.
+    const dir = new THREE.Vector3(b.position.x - cam.position.x, 0, b.position.z - cam.position.z);
+    if (dir.lengthSq() < 1e-4) cam.getWorldDirection(dir).setY(0);
+    dir.normalize();
+    const pos = new THREE.Vector3(cam.position.x + dir.x * JUMPSCARE_DIST, 0, cam.position.z + dir.z * JUMPSCARE_DIST);
+    pos.y = sampleGround(pos.x, pos.z);
+    b.position.copy(pos);
+    body.root.position.copy(pos);
+    body.root.rotation.set(0, Math.atan2(cam.position.x - pos.x, cam.position.z - pos.z), 0);
+    state.state = 'caught';
+    state.position.copy(pos);
+
+    playJumpscareSound();
+    flashRed();
+    const head = new THREE.Vector3();
+    firePing(body.headPosition(head).clone(), JUMPSCARE_PING_RANGE * 1.5, 'entity');
+
+    const t0 = performance.now();
+    let lastPing = 0;
+    const step = () => {
+      if (gen !== scareGen) return; // reset / quit to menu cancelled it
+      const t = (performance.now() - t0) / 1000;
+      body.scare(t);
+      body.headPosition(head);
+      cam.lookAt(head);
+      // Camera shake, strongest at the start.
+      const shake = 0.06 * Math.max(0, 1 - t / JUMPSCARE_S);
+      cam.rotateX((Math.random() - 0.5) * shake);
+      cam.rotateY((Math.random() - 0.5) * shake);
+      if (t - lastPing >= JUMPSCARE_PING_EVERY) {
+        lastPing = t;
+        firePing(head.clone(), JUMPSCARE_PING_RANGE, 'entity');
+      }
+      if (t < JUMPSCARE_S) requestAnimationFrame(step);
+    };
+    step();
+    return JUMPSCARE_S;
+  };
+
   resetFn = () => {
+    scareGen++; // cancel a running jumpscare
+    body.endScare();
     b.reset(startPoint());
     last.copy(b.position);
     walked = 0;
@@ -204,6 +273,27 @@ export function setEntityEnabled(value: boolean): void {
   if (value === enabled) return;
   enabled = value;
   applyEnabledFn?.();
+}
+
+/**
+ * Jumpscare: it appears right in front of the camera, bends down and screams while the camera is
+ * forced to look at it (red pulses light it). Call when 'caught' fires; returns how long it lasts
+ * (seconds) so the caller can wait before fading out, or 0 if the entity is disabled.
+ */
+export function playJumpscare(): number {
+  return jumpscareFn?.() ?? 0;
+}
+
+/** Brief red flash over the whole screen (red = danger, AGENTS.md rule 9). */
+function flashRed(): void {
+  const el = document.createElement('div');
+  el.setAttribute('aria-hidden', 'true');
+  el.style.cssText =
+    'position:fixed;inset:0;z-index:28;pointer-events:none;background:radial-gradient(circle,' +
+    'rgba(255,20,10,0) 30%,rgba(255,20,10,0.75) 100%);opacity:1;transition:opacity 0.6s ease-out;';
+  document.body.appendChild(el);
+  requestAnimationFrame(() => requestAnimationFrame(() => (el.style.opacity = '0')));
+  window.setTimeout(() => el.remove(), 800);
 }
 
 /** Respawn far from the player and patrol again (e.g. after a game over). */
