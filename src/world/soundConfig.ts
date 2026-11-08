@@ -32,6 +32,18 @@ export const TACTILE_COLOR: PingRgb = [1, 0xd4 / 255, 0];
 /** Range of a tactile paving ping (m): small, just the patch underfoot. */
 export const TACTILE_PING_RANGE = 1.2;
 
+/**
+ * Tactile paving rings are yellow (#ffd400). The sonar shader writes colours straight to the screen,
+ * so these are the hex's own 0..1 channel values.
+ */
+export const TACTILE_COLOR: PingRgb = [1, 0xd4 / 255, 0];
+
+/** The entity's own sonar pulses are danger red (AGENTS.md rule 9: red for danger). Added by ENTITY (Ayo). */
+export const ENTITY_PING_COLOR: PingRgb = [1, 0.1, 0.06];
+
+/** Range of a tactile paving ping (m): small, just the patch underfoot. */
+export const TACTILE_PING_RANGE = 1.2;
+
 export const PING_STYLES: Readonly<Record<PingType, Readonly<SoundPingStyle>>> = {
   /** Player's voice / clap: big, bright, slow enough to read the street. */
   voice: { speed: 20, thickness: 1.5, brightness: 1.0, fade: VOICE_FADE },
@@ -47,6 +59,12 @@ export const PING_STYLES: Readonly<Record<PingType, Readonly<SoundPingStyle>>> =
   impact: { speed: 40, thickness: 0.25, brightness: 1.0, fade: 2.5 },
   /** Feet / cane on tactile paving: small (TACTILE_PING_RANGE), bright, quick fade, yellow. */
   tactile: { speed: 8, thickness: 0.15, brightness: 1.0, fade: 4, color: TACTILE_COLOR },
+<<<<<<< HEAD
+  /** The entity's heartbeat pulse: a slow red ring with a long trail, so it paints itself and the street
+   *  around it red for about 2 s (trail level in src/render/pingColors.ts). */
+  entity: { speed: 6, thickness: 1.0, brightness: 1.0, fade: 0.35, color: ENTITY_PING_COLOR },
+=======
+>>>>>>> origin/main
 };
 
 /** The player's own sounds: always outrank world sounds in the ping budget. */
