@@ -21,7 +21,7 @@ export type PingRgb = readonly [number, number, number];
 export type SoundPingStyle = PingStyle & { color?: PingRgb };
 
 /** Cane rings and the lines they reveal are light blue instead of white. [1, 1, 1] = white. */
-export const CANE_COLOR: PingRgb = [0.45, 0.75, 1.0];
+export const CANE_COLOR: PingRgb = [0.75, 0.75, 1.0];
 
 /**
  * Tactile paving rings are yellow (#ffd400). The sonar shader writes colours straight to the screen,
@@ -34,11 +34,11 @@ export const TACTILE_PING_RANGE = 1.2;
 
 export const PING_STYLES: Readonly<Record<PingType, Readonly<SoundPingStyle>>> = {
   /** Player's voice / clap: big, bright, slow enough to read the street. */
-  voice: { speed: 30, thickness: 1.2, brightness: 1.0, fade: VOICE_FADE },
+  voice: { speed: 20, thickness: 1.5, brightness: 1.0, fade: VOICE_FADE },
   /** Player's own footsteps: faint, short (callers use ~2–5 m ranges). */
   footstep: { speed: 12, thickness: 0.3, brightness: 0.35, fade: 2.5 },
   /** Cane sweep / tap: tiny, sharp, quick, and light blue so it stands apart from voice/footstep rings. */
-  cane: { speed: 15, thickness: 0.12, brightness: 0.85, fade: 4, color: CANE_COLOR },
+  cane: { speed: 15, thickness: 0.2, brightness: 0.85, fade: 4, color: CANE_COLOR },
   /** Car engine: medium, periodic. */
   car: { speed: 20, thickness: 0.6, brightness: 0.55, fade: 1.5 },
   /** Other people's footsteps: faint. */
