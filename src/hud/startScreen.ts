@@ -30,6 +30,7 @@ import { initVision } from '../senses/vision';
 import { createVisionPicker } from '../senses/visionPicker';
 import { settings, setEntityEnabledSetting } from '../game/settings';
 import { PAD_BINDINGS, PAD_HELD, type PadButton } from '../player/gamepadConfig';
+import { getActivePad } from '../player/input';
 import { createRoutePicker, initGoalMessage } from './routePicker';
 import { applyRouteStart } from '../player/route';
 
@@ -162,8 +163,8 @@ export function initStartScreen(hud: HTMLElement): void {
   const controls = document.createElement('div');
   controls.style.cssText = 'max-width:640px;opacity:0.85;font-size:13px;';
   controls.textContent =
-    'WASD walk (Shift run) · mouse look · speak, clap or SPACE to send sonar · the cane auto-sweeps as you walk ' +
-    '(X on/off), hold C or right mouse to sweep by hand, B to tap it · V architect map · O vision · U mute sound';
+    'WASD walk · mouse look · speak, clap or SPACE to send sonar · C cane auto-sweep on/off, ' +
+    'hold right mouse to sweep by hand, B to tap it · V architect map · O vision · U mute sound';
 
   const padPanel = createPadPanel();
 
@@ -399,14 +400,8 @@ function createPadPanel(): { el: HTMLElement; update(): void } {
   return {
     el,
     update() {
-      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-      let id: string | null = null;
-      for (const p of pads) {
-        if (p && p.connected) {
-          id = p.id;
-          break;
-        }
-      }
+      // the controller in use (src/player/gamepad.ts): no Gamepad API calls here, so no pad = no work
+      const id = getActivePad()?.id ?? null;
       if (id === shownId) return;
       shownId = id;
       el.style.display = id ? 'block' : 'none';

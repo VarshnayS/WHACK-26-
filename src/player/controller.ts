@@ -2,9 +2,10 @@
 //
 // First-person controller: WASD + mouse look (PointerLockControls), momentum,
 // raycast ground-following, wall sliding, rebound, and the collision "stun" penalty.
-// Walking tops out at WALK_SPEED; hold Shift (or click L3 on a controller) to run up to MAX_SPEED.
-// A controller feeds analogue movement through setPadInput() (src/player/gamepad.ts); the stick's
-// deflection scales the top speed. onPlayerImpact() reports every bump and stun (haptics).
+// Movement comes from src/player/input.ts: keyboard + controller stick, added together and clamped.
+// Keyboard alone behaves exactly as before PR #20: speed builds up to MAX_SPEED while a key is held
+// (no Shift, no walk cap). The stick uses the same momentum; how far it's pushed scales the top speed.
+// onPlayerImpact() reports every bump and stun (haptics).
 
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
@@ -22,6 +23,7 @@ import {
 } from './collision';
 import { createStunEffect } from './stunEffect';
 import { recordAudit } from './auditRecord';
+import { attachInput, clearHeldInput, readMove, type MoveInput } from './input';
 import { clampToPlayArea, isInsidePlayArea } from '../world/playArea';
 
 
@@ -29,8 +31,7 @@ import { clampToPlayArea, isInsidePlayArea } from '../world/playArea';
 // Tuning
 // ---------------------------------------------------------------------------
 
-const MAX_SPEED = 5.5;          // m/s, cap while running (Shift / L3)
-const WALK_SPEED = 1.8;         // m/s, cap while walking
+const MAX_SPEED = 5.5;          // m/s, cap (a brisk run); a part-pushed stick scales it down
 const ACCELERATION = 3.0;       // m/s^2 while a key is held (~1.8 s to reach max)
 const DECELERATION = 4.0;       // m/s^2 friction when no key is held (~1.4 s to stop)
 const TURN_FRICTION = 4.0;      // 1/s, bleeds sideways velocity so direction changes feel responsive
@@ -129,11 +130,6 @@ export interface PlayerController {
   /** Clear stun, velocity, held keys and the daze effect (used when a run restarts). */
   reset(): void;
   /**
-   * Analogue movement from a controller: x = strafe right, z = forward, each -1..1 (deadzone already
-   * applied; the length sets the top speed). `run` = L3. Works without pointer lock. Keyboard wins.
-   */
-  setPadInput(x: number, z: number, run: boolean): void;
-  /**
    * Teleport to `position` (x/z; y snaps to the ground), stop, clear any stun, and face `lookAt`
    * if given (level gaze). Clamped inside the corridor walls. Used for the route's start point.
    */
@@ -141,19 +137,6 @@ export interface PlayerController {
   /** Disable e.g. while the free-fly debug camera is active. */
   setEnabled(enabled: boolean): void;
   dispose(): void;
-}
-
-// ---------------------------------------------------------------------------
-// Keyboard state
-// ---------------------------------------------------------------------------
-
-const keys = new Set<string>();
-const onKeyDown = (e: KeyboardEvent) => keys.add(e.code);
-const onKeyUp = (e: KeyboardEvent) => keys.delete(e.code);
-const onBlur = () => keys.clear(); // avoid "stuck" keys when the window loses focus
-
-function axis(positive: string, negative: string): number {
-  return (keys.has(positive) ? 1 : 0) - (keys.has(negative) ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +156,7 @@ const lastNormal = new THREE.Vector3();
 const lastPoint = new THREE.Vector3();
 const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const UP = new THREE.Vector3(0, 1, 0);
+const move: MoveInput = { x: 0, z: 0, amount: 0 };
 
 let current: PlayerController | null = null;
 let lastLoggedWallObject: THREE.Object3D | null = null;
@@ -190,9 +174,6 @@ export function initController(options: ControllerOptions = {}): PlayerControlle
 
   let enabled = true;
   let stunTimer = 0;
-  let padX = 0;
-  let padZ = 0;
-  let padRun = false;
 
   // Collision targets
   if (USE_TEST_GEOMETRY) {
@@ -208,9 +189,7 @@ export function initController(options: ControllerOptions = {}): PlayerControlle
     if (enabled && !controls.isLocked) controls.lock();
   };
   world.renderer.domElement.addEventListener('click', onClick);
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
-  window.addEventListener('blur', onBlur);
+  const detachInput = attachInput();
 
 /**
  * Check for walls in the direction of travel and slide along them.
@@ -349,23 +328,14 @@ function resolveWalls(pos: THREE.Vector3): number {
       pos.z += velocity.z * dt;
     } else {
       // ---- 1. Input -> wish direction (relative to where the camera faces) ----
-      const locked = controls.isLocked;
-      let ix = locked ? axis('KeyD', 'KeyA') : 0;
-      let iz = locked ? axis('KeyW', 'KeyS') : 0;
-      let amount = 1; // 0..1, scales the top speed (analogue stick)
-      let run = locked && (keys.has('ShiftLeft') || keys.has('ShiftRight'));
-      if (ix === 0 && iz === 0) {
-        ix = padX;
-        iz = padZ;
-        amount = Math.min(1, Math.hypot(ix, iz));
-        run = padRun;
-      }
-      const cap = (run ? MAX_SPEED : WALK_SPEED) * amount;
+      // Keyboard (only while the mouse is locked, as before) + stick, clamped to length 1.
+      readMove(controls.isLocked, move);
+      const cap = MAX_SPEED * move.amount; // keyboard alone: amount = 1
 
       euler.setFromQuaternion(camera.quaternion);
       forward.set(0, 0, -1).applyAxisAngle(UP, euler.y);
       right.set(-forward.z, 0, forward.x);
-      wish.set(0, 0, 0).addScaledVector(forward, iz).addScaledVector(right, ix);
+      wish.set(0, 0, 0).addScaledVector(forward, move.z).addScaledVector(right, move.x);
 
       // ---- 2. Momentum / friction ----
       if (wish.lengthSq() > 0) {
@@ -376,8 +346,8 @@ function resolveWalls(pos: THREE.Vector3): number {
         lateral.multiplyScalar(Math.max(0, 1 - TURN_FRICTION * dt));
         velocity.copy(lateral).addScaledVector(wish, along);
         const speed = velocity.length();
-        if (speed > cap) {
-          // e.g. let go of Shift / eased off the stick: slow down to the new top speed
+        if (cap < MAX_SPEED && speed > cap) {
+          // eased off the stick: slow down to the new top speed (the keyboard never gets here)
           velocity.setLength(Math.max(cap, speed - DECELERATION * dt));
         } else {
           // Speed builds up the longer the key is held.
@@ -455,13 +425,8 @@ function resolveWalls(pos: THREE.Vector3): number {
     reset() {
       stunTimer = 0;
       velocity.set(0, 0, 0);
-      keys.clear();
+      clearHeldInput();
       effect.reset();
-    },
-    setPadInput(x, z, run) {
-      padX = x;
-      padZ = z;
-      padRun = run;
     },
     placeAt(position, lookAt) {
       const pos = camera.position;
@@ -489,9 +454,7 @@ function resolveWalls(pos: THREE.Vector3): number {
     },
     dispose() {
       world.renderer.domElement.removeEventListener('click', onClick);
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
+      detachInput();
       effect.dispose();
       controls.dispose();
       if (current === controller) current = null;
