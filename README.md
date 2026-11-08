@@ -70,7 +70,7 @@ Check the proxy works by opening http://localhost:8787/v1/3dtiles/root.json. You
 
 ### Controls
 
-Keyboard and mouse work exactly as before the controller support (PR #20 changed W/A/S/D's top speed and the C/V cane keys; fix/input-keyboard-controller put them back). A controller works too, at the same time as the keyboard: plug it in and press any button. The two are **added together** (`src/player/input.ts`): keys + left stick for movement, mouse + right stick for look. An idle controller contributes nothing and never overrides the keyboard, and with no controller connected the controller code does no work at all. The mapping lives in one table, `src/player/gamepadConfig.ts`. A button sends the same key event as its key, so it does exactly the same thing. **LT+** means hold LT (the controller's Shift layer).
+Keyboard and mouse work exactly as before the controller support (PR #20 changed W/A/S/D's top speed and the C/V cane keys; PR #25 put them back). A controller works too, at the same time as the keyboard: plug it in and press any button. The two are **added together** (`src/player/input.ts`): keys + left stick for movement, mouse + right stick for look. An idle controller contributes nothing and never overrides the keyboard, and with no controller connected the controller code does no work at all. The mapping lives in one table, `src/player/gamepadConfig.ts`. A button sends the same key event as its key, so it does exactly the same thing. **LT+** means hold LT (the controller's Shift layer).
 
 | Key | Controller | Action |
 |---|---|---|
