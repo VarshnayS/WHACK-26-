@@ -4,6 +4,22 @@
  */
 import type { PingType } from '../shared/contracts';
 
+// --- spawn -----------------------------------------------------------------------------------------
+
+/** It spawns inside the play area (the corridor, 200 x 80 m), between SPAWN_MIN_DIST and SPAWN_MAX_DIST
+ * from the player's START point: far enough not to catch them at once, close enough to hear them. */
+export const SPAWN_MIN_DIST = 30;
+export const SPAWN_MAX_DIST = 80;
+/** With a goal set: it spawns at least this far (m) from the straight line start -> goal, on a random
+ * side of it, so it flanks the route instead of standing on it. Halved, then dropped, only if no
+ * spot qualifies. */
+export const SPAWN_PATH_CLEARANCE = 15;
+/** It never spawns within this distance of the run's goal point (route picker on the start screen). */
+export const SPAWN_GOAL_MIN_DIST = 30;
+/** A player jump bigger than this in one frame is a teleport (e.g. "begin" moving you to the start
+ * point): it re-spawns away from the new position and waits for the player again. */
+export const TELEPORT_DIST = 5;
+
 // --- movement --------------------------------------------------------------------------------------
 
 /**
@@ -12,11 +28,11 @@ import type { PingType } from '../shared/contracts';
  */
 export const OMNISCIENT = true;
 /** OMNISCIENT: stalking speed at the start, how fast it ramps up (m/s per second hunting), and the cap. */
-export const STALK_SPEED = 1.4;
-export const STALK_RAMP = 0.015;
-export const STALK_MAX_SPEED = 3.0;
+export const STALK_SPEED = 1.0;
+export const STALK_RAMP = 0.008;
+export const STALK_MAX_SPEED = 2.0;
 /** OMNISCIENT: speed for BOOST_TIME after it hears a player sound (player run cap is 5.5). */
-export const CHASE_BOOST_SPEED = 3.5;
+export const CHASE_BOOST_SPEED = 2.6;
 export const BOOST_TIME = 5;
 /** OMNISCIENT: how often it re-plans the shortest route to the player. */
 export const REPLAN_INTERVAL = 0.5;
@@ -60,6 +76,21 @@ export const REFERENCE_RANGE = 40;
 export const RANGE_FACTOR_MIN = 0.25;
 export const RANGE_FACTOR_MAX = 1.5;
 
+/** Jumpscare when it catches you (src/game/flow.ts waits this long before fading to the report). */
+export const JUMPSCARE_S = 1.5;
+/** It appears this far in front of the camera (m) for the jumpscare. */
+export const JUMPSCARE_DIST = 1.3;
+/** Red pulses fired from its head during the jumpscare: every N seconds, reaching M metres. */
+export const JUMPSCARE_PING_EVERY = 0.35;
+export const JUMPSCARE_PING_RANGE = 6;
+
+/** Its red 'entity' sonar pulse (a heartbeat): every HEARTBEAT_EVERY seconds (+/- 15%), reaching
+ * HEARTBEAT_RANGE metres, so it lights itself and the street around it and never appears from nowhere. */
+export const HEARTBEAT_EVERY = 2.5;
+export const HEARTBEAT_RANGE = 12;
+/** Height of the pulse's origin above its feet (m): mid-body, so it lights the whole figure. */
+export const HEARTBEAT_HEIGHT = 1.2;
+
 /**
  * How loud each ping type is to the entity. Voice and impact are loud, footsteps quiet, cars and
  * pedestrians background (only heard when very close).
@@ -71,6 +102,8 @@ export const TYPE_LOUDNESS: Record<PingType, number> = {
   footstep: 0.3,
   car: 0.1,
   pedestrian: 0.1,
+  tactile: 0.1,
+  entity: 0, // its own heartbeat pulses
 };
 
 /** Ping types the player makes. Hearing one of these close enough starts a chase. */

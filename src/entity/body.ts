@@ -15,6 +15,12 @@ export interface EntityBody {
   root: THREE.Group;
   /** Pose it for this frame. */
   update(dt: number, position: THREE.Vector3, heading: number, speed: number): void;
+  /** Jumpscare pose at `t` seconds in: bends down towards the camera, arms reaching, head screaming. */
+  scare(t: number): void;
+  /** Back to the normal pose (and sonar material) after a jumpscare. */
+  endScare(): void;
+  /** World position of its head (the jumpscare camera looks here). */
+  headPosition(out: THREE.Vector3): THREE.Vector3;
 }
 
 /** The sonar shader's final output: `gl_FragColor = vec4(<colour expr>, 1.0);` */
@@ -98,6 +104,26 @@ export function createEntityBody(): EntityBody {
   const skull = part(new THREE.SphereGeometry(0.09 * Math.sqrt(b), 10, 8), head, 0, 0.07, 0.02);
   skull.scale.set(1.05, 0.95, 1); // small for the body, slightly wide
 
+  // Rest positions, so the jumpscare can bend the upper body around the hips and then restore it.
+  const neckBase = neck.position.clone();
+  const armLBase = armL.position.clone();
+  const armRBase = armR.position.clone();
+  const torsoBaseX = torso.rotation.x;
+  const skullBase = skull.scale.clone();
+  /** Rotate a rest position around the hip pivot by `angle` (forward bend, about X). */
+  const bendAt = (obj: THREE.Object3D, base: THREE.Vector3, angle: number) => {
+    const y = base.y - hipY;
+    const z = base.z;
+    obj.position.set(base.x, hipY + y * Math.cos(angle) - z * Math.sin(angle), y * Math.sin(angle) + z * Math.cos(angle));
+  };
+
+  const scareMaterial = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(BODY_TINT[0], BODY_TINT[1], BODY_TINT[2]),
+    wireframe: true,
+    transparent: true,
+  });
+  let glowing = false;
+
   let phase = 0;
   let twitchTimer = 2;
   let twitchTarget = 0;
@@ -132,6 +158,57 @@ export function createEntityBody(): EntityBody {
       headTilt += (twitchTarget - headTilt) * Math.min(1, dt * 18);
       head.rotation.z = headTilt;
       neck.rotation.x = 0.35 + Math.sin(phase * 0.5) * 0.05;
+    },
+
+    scare(t) {
+      // Solid glowing red wireframe for the jumpscare: sonar reveals fade too fast to read it up close.
+      if (!glowing) {
+        glowing = true;
+        root.traverse((o) => {
+          if (o instanceof THREE.Mesh) o.material = scareMaterial;
+        });
+      }
+      scareMaterial.opacity = 0.75 + Math.random() * 0.25; // flicker
+      // Lunge-bend in the first 0.25 s (slight overshoot), then hold and tremble.
+      const k = Math.min(1, t / 0.25);
+      const ease = 1 + 2.2 * (k - 1) ** 3 + 1.2 * (k - 1) ** 2; // ease-out with overshoot
+      const tremble = (Math.random() - 0.5) * 0.06;
+      const bend = 0.95 * ease + tremble;
+      torso.rotation.x = torsoBaseX + bend;
+      torso.rotation.z = (Math.random() - 0.5) * 0.05;
+      bendAt(neck, neckBase, bend);
+      bendAt(armL, armLBase, bend);
+      bendAt(armR, armRBase, bend);
+      // Head comes up to face you; jerky tilt; skull stretches like a wide-open scream.
+      neck.rotation.x = 0.35 - bend * 1.1;
+      head.rotation.z = (Math.random() - 0.5) * 0.5;
+      skull.scale.set(skullBase.x * (1 + 0.1 * ease), skullBase.y * (1 + 0.35 * ease + Math.random() * 0.08), skullBase.z);
+      // Arms swing forward and out, reaching for you.
+      armL.rotation.set(-1.5 * ease + tremble, 0, 0.45 * ease);
+      armR.rotation.set(-1.6 * ease - tremble, 0, -0.45 * ease);
+      legL.rotation.x = 0.25 * ease;
+      legR.rotation.x = -0.1 * ease;
+    },
+
+    endScare() {
+      if (glowing) {
+        glowing = false;
+        root.traverse((o) => {
+          if (o instanceof THREE.Mesh) o.material = material;
+        });
+      }
+      torso.rotation.set(torsoBaseX, 0, 0);
+      neck.position.copy(neckBase);
+      armL.position.copy(armLBase);
+      armR.position.copy(armRBase);
+      armL.rotation.set(0, 0, 0);
+      armR.rotation.set(0, 0, 0);
+      skull.scale.copy(skullBase);
+    },
+
+    headPosition(out) {
+      root.updateMatrixWorld(true);
+      return skull.getWorldPosition(out);
     },
   };
 }

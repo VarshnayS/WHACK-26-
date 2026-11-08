@@ -5,7 +5,9 @@
  * Everything is drawn white on black (AGENTS.md rule 9): a style changes speed, ring thickness,
  * brightness and how fast the ring fades after it passes. A style may also carry a `color`, which
  * src/render/pingColors.ts honours (render-side extension of PingStyle). One deliberate exception
- * to rule 9: cane pings are light blue (CANE_COLOR), so the cane's sonar reads apart from everything else. Tune here, nowhere else.
+ * to rule 9: cane pings are light blue (CANE_COLOR), so the cane's sonar reads apart from everything else.
+ * Tactile paving pings are yellow (TACTILE_COLOR): rule 9 reserves yellow for accessibility features.
+ * Tune here, nowhere else.
  */
 import type { PingStyle, PingType } from '../shared/contracts';
 import { PED_PING_BRIGHTNESS, PED_PING_RANGE, PED_PING_RADIUS, VOICE_FADE } from '../config';
@@ -21,6 +23,18 @@ export type SoundPingStyle = PingStyle & { color?: PingRgb };
 /** Cane rings and the lines they reveal are light blue instead of white. [1, 1, 1] = white. */
 export const CANE_COLOR: PingRgb = [0.45, 0.75, 1.0];
 
+/**
+ * Tactile paving rings are yellow (#ffd400). The sonar shader writes colours straight to the screen,
+ * so these are the hex's own 0..1 channel values.
+ */
+export const TACTILE_COLOR: PingRgb = [1, 0xd4 / 255, 0];
+
+/** The entity's own sonar pulses are danger red (AGENTS.md rule 9: red for danger). Added by ENTITY (Ayo). */
+export const ENTITY_PING_COLOR: PingRgb = [1, 0.1, 0.06];
+
+/** Range of a tactile paving ping (m): small, just the patch underfoot. */
+export const TACTILE_PING_RANGE = 1.2;
+
 export const PING_STYLES: Readonly<Record<PingType, Readonly<SoundPingStyle>>> = {
   /** Player's voice / clap: big, bright, slow enough to read the street. */
   voice: { speed: 30, thickness: 1.2, brightness: 1.0, fade: VOICE_FADE },
@@ -34,10 +48,15 @@ export const PING_STYLES: Readonly<Record<PingType, Readonly<SoundPingStyle>>> =
   pedestrian: { speed: 10, thickness: 0.25, brightness: PED_PING_BRIGHTNESS, fade: 2.5 },
   /** Player hits something: sharp and bright. */
   impact: { speed: 40, thickness: 0.25, brightness: 1.0, fade: 2.5 },
+  /** Feet / cane on tactile paving: small (TACTILE_PING_RANGE), bright, quick fade, yellow. */
+  tactile: { speed: 8, thickness: 0.15, brightness: 1.0, fade: 4, color: TACTILE_COLOR },
+  /** The entity's heartbeat pulse: a slow red ring with a long trail, so it paints itself and the street
+   *  around it red for about 2 s (trail level in src/render/pingColors.ts). */
+  entity: { speed: 6, thickness: 1.0, brightness: 1.0, fade: 0.35, color: ENTITY_PING_COLOR },
 };
 
 /** The player's own sounds: always outrank world sounds in the ping budget. */
-export const PLAYER_PING_TYPES: readonly PingType[] = ['voice', 'footstep', 'cane', 'impact'];
+export const PLAYER_PING_TYPES: readonly PingType[] = ['voice', 'footstep', 'cane', 'impact', 'tactile'];
 
 /**
  * A ping stays in the pool until its wave reaches `range`, plus this many fade time constants

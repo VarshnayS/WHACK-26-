@@ -31,6 +31,8 @@ export const DEV_PING_PRESETS: Record<PingType, DevPingPreset> = {
   car: { range: 25, atFeet: true, style: { speed: 40, thickness: 3.0, brightness: 0.6, fade: 1.5 } },
   pedestrian: { range: 5, atFeet: true, style: { speed: 10, thickness: 0.5, brightness: 0.35, fade: 3 } },
   impact: { range: 30, atFeet: false, style: { speed: 55, thickness: 0.8, brightness: 1.0, fade: 1.0 } },
+  tactile: { range: 1.2, atFeet: true, style: { speed: 8, thickness: 0.15, brightness: 1.0, fade: 4 } },
+  entity: { range: 12, atFeet: true, style: { speed: 6, thickness: 1.0, brightness: 1.0, fade: 0.35 } },
 };
 
 const TYPES = Object.keys(DEV_PING_PRESETS) as PingType[];

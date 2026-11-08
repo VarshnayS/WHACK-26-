@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import type { EntityStateName } from '../shared/contracts';
 import type { EntityBrain } from './brain';
-import { breathCycle, footstep, gasp, growl, shriek } from './synth';
+import { boom, breathCycle, footstep, gasp, growl, shriek } from './synth';
 
 interface Voice {
   audio: THREE.PositionalAudio;
@@ -60,6 +60,13 @@ export function getListener(camera: THREE.Camera): THREE.AudioListener {
 }
 
 /** Overall entity volume 0..1 (e.g. for a settings menu). */
+let jumpscareSound: (() => void) | null = null;
+
+/** Loud, in-your-face scream + impact for the jumpscare (not positional, ignores distance). */
+export function playJumpscareSound(): void {
+  jumpscareSound?.();
+}
+
 export function setEntityVolume(v: number): void {
   master = Math.max(0, v); // applied on the next frame
 }
@@ -88,6 +95,26 @@ export function initEntityAudio(brain: EntityBrain, body: THREE.Object3D, camera
     grumble: toBuffer(growl(sr, 1.1, 0.8)),
     gasp: toBuffer(gasp(sr)),
     shriek: toBuffer(shriek(sr)),
+  };
+
+  const boomBuf = toBuffer(boom(sr));
+  jumpscareSound = () => {
+    if (ctx.state !== 'running') void ctx.resume();
+    const out = listener.getInput(); // the listener's master gain: the death fade fades this tail
+    const fire = (buf: AudioBuffer, gain: number, rate: number, delay = 0) => {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = rate;
+      const g = ctx.createGain();
+      g.gain.value = gain * master;
+      src.connect(g).connect(out);
+      src.start(ctx.currentTime + delay);
+      src.onended = () => g.disconnect();
+    };
+    fire(boomBuf, 1.6, 1);
+    fire(sounds.shriek, 1.8, 0.82, 0.04);
+    fire(sounds.shriek, 1.1, 1.13, 0.09); // second voice a fifth up: harsher
+    fire(sounds.growl, 1.4, 0.6);
   };
 
   const makeVoice = (y: number, near: number, far: number): Voice => {
@@ -139,7 +166,7 @@ export function initEntityAudio(brain: EntityBrain, body: THREE.Object3D, camera
     if (e.type === 'heard') {
       if (brain.state !== 'chase') play(mouth, sounds.gasp, 0.9, 0.9 + Math.random() * 0.15);
     } else if (e.type === 'caught') {
-      play(mouth, sounds.shriek, 1.5);
+      // The scream is played by the jumpscare (playJumpscareSound), full volume in your face.
     } else if (e.state === 'chase') {
       play(mouth, sounds.growl, 1.2);
     } else if (e.previous === 'chase' && e.state === 'patrol') {

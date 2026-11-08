@@ -143,3 +143,21 @@ export function shriek(sampleRate: number): Float32Array {
   }
   return normalise(out, 0.95);
 }
+/** A deep, distorted impact for the jumpscare: sub thump plus a burst of noise. */
+export function boom(sampleRate: number): Float32Array {
+  const dur = 0.9;
+  const n = Math.floor(sampleRate * dur);
+  const out = new Float32Array(n);
+  const noise = rng(91);
+  let phase = 0;
+  let lp = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / sampleRate;
+    phase += (2 * Math.PI * (38 + 70 * Math.exp(-t * 18))) / sampleRate;
+    lp += 0.25 * (noise() - lp);
+    const thump = Math.sin(phase) * Math.exp(-t * 4);
+    const crack = lp * Math.exp(-t * 22) * 2.5;
+    out[i] = Math.tanh((thump + crack) * 2.2);
+  }
+  return normalise(out, 0.98);
+}

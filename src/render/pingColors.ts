@@ -38,6 +38,8 @@ export const DEFAULT_TRAIL_LEVEL = 0.35;
 /** Per-type trail level (REVEAL TUNING in src/config.ts). Types not listed use DEFAULT_TRAIL_LEVEL. */
 export const PING_TRAIL_LEVELS: Partial<Record<PingType, number>> = {
   voice: VOICE_TRAIL_LEVEL,
+  /** The entity's red heartbeat lingers so it lights itself and its surroundings (ENTITY, Ayo). */
+  entity: 0.8,
 };
 
 export function pingTrailLevel(type: PingType): number {
