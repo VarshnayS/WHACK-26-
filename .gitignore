@@ -16,3 +16,4 @@ public/draco/
 # OS / logs
 .DS_Store
 *.log
+*.zip
